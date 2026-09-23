@@ -1,2 +1,5 @@
-google-cloud-bigquery
+anthropic>=1.8
+google-cloud-bigquery>=3.45
+python-dotenv>=1.0
+# Only needed by scripts/ (DataFrame previews)
 db-dtypes

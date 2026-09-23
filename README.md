@@ -4,8 +4,8 @@ A conversational data analysis app over the
 [GA4 web ecommerce demo dataset](https://developers.google.com/analytics/bigquery/web-ecommerce-demo-dataset).
 Users ask questions in a chat; an agent queries BigQuery and answers with charts and a written narrative.
 
-> Work in progress. So far: BigQuery access, dataset profiling, and validated example queries.
-> The agent loop and chat UI are next.
+> Work in progress. So far: dataset profiling, validated example queries, and a working agent
+> with a terminal interface. Charts and the web chat UI are next.
 
 ## Setup
 
@@ -27,7 +27,7 @@ Requirements: Python 3.11+ and the [Google Cloud CLI](https://cloud.google.com/s
    .venv/bin/pip install -r requirements.txt
    ```
 
-3. **Configure:** copy `.env.example` to `.env` and set `GOOGLE_CLOUD_PROJECT`.
+3. **Configure:** copy `.env.example` to `.env` and set `GOOGLE_CLOUD_PROJECT` and `ANTHROPIC_API_KEY`.
 
 4. **Check the connection:**
 
@@ -35,9 +35,38 @@ Requirements: Python 3.11+ and the [Google Cloud CLI](https://cloud.google.com/s
    GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID .venv/bin/python scripts/check_bigquery.py
    ```
 
+## Usage
+
+Terminal chat (`--show-sql` prints each query the agent runs):
+
+```bash
+.venv/bin/python -m app.cli --show-sql
+```
+
+## How it works
+
+`app/agent.py` implements the agent loop directly on the Anthropic Messages API (no agent framework):
+stream Claude's reply, run any `run_sql` tool calls it makes, send the results back, and repeat until
+it answers (bounded by `max_agent_steps`). The conversation history is kept between questions, so
+follow-ups work; a failed turn is rolled back so the history always stays valid.
+
+Guardrails on every query (`app/bigquery_tool.py`): a free BigQuery dry run rejects anything that is
+not a single `SELECT` and anything that would scan more than the byte limit; the real run also sets
+`maximum_bytes_billed`, and only the first rows are returned to the model. SQL errors are returned to
+the model so it can fix its own query.
+
+The system prompt (`app/prompts.py`) is built from `docs/`, so the dataset notes and example queries
+have one source of truth, and it is cached with prompt caching.
+
 ## Project layout
 
 ```
+app/
+  agent.py                Agent loop, tool definition, streamed events
+  bigquery_tool.py        Read-only query execution with dry-run guardrails
+  prompts.py              System prompt assembled from docs/
+  config.py               Settings from environment / .env
+  cli.py                  Terminal chat
 docs/
   dataset_notes.md        What the data looks like, its pitfalls and obfuscation (basis for the system prompt)
   example_queries.sql     Validated SQL for common analyses (funnel, channels, products, cohorts, ...)
