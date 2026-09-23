@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local configuration and secrets
+.env
+*credentials*.json
+*service-account*.json
+*-key.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
