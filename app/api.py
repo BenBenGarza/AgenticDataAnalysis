@@ -8,10 +8,12 @@ time (see README), so one ChatSession serves every request.
 import json
 from collections.abc import AsyncIterator, Generator
 from dataclasses import asdict
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, StringConstraints
 from starlette.concurrency import run_in_threadpool
 
@@ -25,11 +27,12 @@ from app.events import (
     TurnFailed,
     TurnFinished,
 )
-from app.session import ChatSession
+from app.session import ChatSession, SessionBusy
 from app.storage import Conversation, ConversationNotFound
 from app.tools import run_sql
 
 MAX_QUESTION_CHARS = 4_000
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 class ChatRequest(BaseModel):
@@ -44,6 +47,10 @@ def create_app(session: ChatSession) -> FastAPI:
     @app.exception_handler(ConversationNotFound)
     async def conversation_not_found(request: Request, exc: ConversationNotFound) -> JSONResponse:
         return JSONResponse({"detail": f"Conversation {exc} not found"}, status_code=404)
+
+    @app.exception_handler(SessionBusy)
+    async def session_busy(request: Request, exc: SessionBusy) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
 
     @app.get("/api/session")
     def get_session() -> dict[str, Any]:
@@ -76,6 +83,8 @@ def create_app(session: ChatSession) -> FastAPI:
         session.delete(conversation_id)
         return Response(status_code=204)
 
+    # The chat UI. Mounted last so the /api routes above take precedence.
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
     return app
 
 

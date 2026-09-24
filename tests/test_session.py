@@ -1,7 +1,7 @@
 import pytest
 
-from app.events import ToolStarted
-from app.session import ChatSession, DisplayTurn, to_display_turns
+from app.events import ToolStarted, TurnFailed, TurnFinished
+from app.session import BUSY_MESSAGE, ChatSession, DisplayTurn, SessionBusy, to_display_turns
 from app.storage import ConversationStore
 from tests.fakes import FAILING_QUESTION, FakeAgent
 
@@ -94,6 +94,52 @@ def test_abandoning_a_turn_midway_saves_nothing(store):
 
     assert session.conversation is None
     assert store.list_conversations(1) == []
+
+
+def test_session_cannot_change_while_an_answer_is_in_progress(store):
+    session = ChatSession(store, FakeAgent, MODEL)
+    _ask(session, "first")
+    first_id = session.conversation.id
+    session.new_chat()
+
+    turn = session.ask("second")
+    next(turn)  # the answer has started
+
+    for change in (
+        lambda: session.open(first_id),
+        session.new_chat,
+        lambda: session.delete(first_id),
+        lambda: session.ask("another"),
+    ):
+        with pytest.raises(SessionBusy):
+            change()
+
+    list(turn)  # the answer finishes...
+    session.open(first_id)  # ...and the session can change again
+    assert session.conversation.id == first_id
+
+
+def test_two_turns_started_together_only_one_runs(store):
+    session = ChatSession(store, FakeAgent, MODEL)
+    first = session.ask("first")  # both pass the up-front check before either starts
+    second = session.ask("second")
+
+    next(first)
+    assert list(second) == [TurnFailed(BUSY_MESSAGE)]
+    assert isinstance(list(first)[-1], TurnFinished)
+
+
+@pytest.mark.parametrize("question", ["normal", FAILING_QUESTION])
+def test_session_is_free_again_after_a_turn_ends_or_is_abandoned(store, question):
+    session = ChatSession(store, FakeAgent, MODEL)
+
+    _ask(session, question)
+    session.new_chat()  # would raise if still busy
+
+    abandoned = session.ask("q")
+    next(abandoned)
+    abandoned.close()
+    session.new_chat()
 
 
 def test_display_turns_rebuilds_questions_queries_and_answers():

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GA4 Analyst</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/js/main.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span class="brand">GA4 Analyst</span>
+        <button type="button" id="new-chat" class="new-chat">+ New chat</button>
+      </div>
+      <nav id="conversation-list" class="conversation-list" aria-label="Conversations"></nav>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+    <main class="main">
+      <header class="topbar">
+        <button type="button" id="toggle-sidebar" class="icon-button"
+                aria-label="Show conversations">☰</button>
+        <h1 id="conversation-title">New conversation</h1>
+      </header>
+
+      <section id="messages" class="messages" aria-live="polite"></section>
+
+      <form id="composer" class="composer">
+        <textarea id="question" rows="1" maxlength="4000"
+                  placeholder="Ask about the Google Merchandise Store data…"
+                  aria-label="Your question"></textarea>
+        <button type="submit" id="send" class="send">Send</button>
+      </form>
+    </main>
+  </div>
+</body>
+</html>

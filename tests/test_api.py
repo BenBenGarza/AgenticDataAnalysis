@@ -10,12 +10,16 @@ from tests.fakes import FAILING_QUESTION, FakeAgent
 
 
 @pytest.fixture
-def client(tmp_path):
+def session(tmp_path):
     store = ConversationStore(tmp_path / "app.db")
-    session = ChatSession(store, FakeAgent, "test-model")
+    yield ChatSession(store, FakeAgent, "test-model")
+    store.close()
+
+
+@pytest.fixture
+def client(session):
     with TestClient(create_app(session)) as client:
         yield client
-    store.close()
 
 
 def _chat(client: TestClient, question: str) -> list[tuple[str, dict]]:
@@ -113,3 +117,26 @@ def test_unknown_conversation_is_404(client, method, path):
     response = getattr(client, method)(path)
     assert response.status_code == 404
     assert response.json() == {"detail": "Conversation 999 not found"}
+
+
+@pytest.mark.parametrize(
+    "method, path, body",
+    [
+        ("post", "/api/chat", {"question": "another"}),
+        ("post", "/api/session/new", None),
+        ("post", "/api/conversations/1/open", None),
+        ("delete", "/api/conversations/1", None),
+    ],
+)
+def test_changes_are_refused_with_409_while_an_answer_is_in_progress(
+    client, session, method, path, body
+):
+    _chat(client, "first")
+    answer_in_progress = session.ask("second")  # e.g. streaming to another browser tab
+    next(answer_in_progress)
+
+    response = client.request(method.upper(), path, json=body)
+
+    assert response.status_code == 409
+    assert "An answer is in progress" in response.json()["detail"]
+    answer_in_progress.close()

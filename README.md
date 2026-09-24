@@ -4,8 +4,8 @@ A conversational data analysis app over the
 [GA4 web ecommerce demo dataset](https://developers.google.com/analytics/bigquery/web-ecommerce-demo-dataset).
 Users ask questions in a chat; an agent queries BigQuery and answers with charts and a written narrative.
 
-> Work in progress. So far: dataset profiling, validated example queries, and a working agent
-> with a terminal interface. Charts and the web chat UI are next.
+> Work in progress. Working: the agent, persistence, the web API and the chat UI.
+> Charts are next.
 
 ## Setup
 
@@ -37,11 +37,18 @@ Requirements: Python 3.11+ and the [Google Cloud CLI](https://cloud.google.com/s
 
 ## Usage
 
-Web API (the chat UI will be served from the same server):
+Start the app and open **http://127.0.0.1:8000** (API docs at `/docs`):
 
 ```bash
-.venv/bin/python -m app.server        # http://127.0.0.1:8000, interactive API docs at /docs
+.venv/bin/python -m app.server
 ```
+
+The chat UI is plain HTML, CSS and JavaScript (no UI framework, no build step), served by the same
+server from `app/static/`. It streams answers as they're written, shows each query the agent runs
+(expand a card for the SQL and result rows), and keeps a conversation list; Stop cancels an answer
+and nothing from it is saved. Answers are Markdown, rendered by a small renderer in
+`app/static/js/markdown.js` that escapes all text before adding markup, so model output can't
+inject HTML or scripts.
 
 | Endpoint | Purpose |
 |---|---|
@@ -114,6 +121,14 @@ app/
   server.py               Starts the web server
   config.py               Settings from environment / .env
   cli.py                  Terminal chat
+  static/                 Chat UI
+    index.html, styles.css
+    js/main.js            App controller: state, wiring, composer
+    js/api.js             Backend calls + Server-Sent Events stream parsing
+    js/chat.js            Messages, streamed answers, query cards
+    js/sidebar.js         Conversation list
+    js/markdown.js        Safe Markdown renderer
+    js/dom.js             Element helper
 docs/
   dataset_notes.md        What the data looks like, its pitfalls and obfuscation (basis for the system prompt)
   example_queries.sql     Validated SQL for common analyses (funnel, channels, products, cohorts, ...)
