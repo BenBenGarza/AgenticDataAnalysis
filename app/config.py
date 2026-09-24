@@ -7,6 +7,8 @@ from typing import Literal, cast, get_args
 
 from dotenv import load_dotenv
 
+from app.events import TokenPrices
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
@@ -16,6 +18,8 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 class Settings:
     gcp_project: str
     model: str = "claude-opus-5-5"
+    # List prices for that model, used to estimate cost per answer (5-minute cache writes).
+    prices: TokenPrices = TokenPrices(input=4.0, output=20.0, cache_write=5.0, cache_read=0.20)
     # How much the model thinks (low | medium | high | xhigh | max). Opus 5.5 defaults to medium;
     # writing correct SQL over nested GA4 data benefits from high.
     effort: Effort = "high"

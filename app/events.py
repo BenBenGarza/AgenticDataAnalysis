@@ -43,6 +43,16 @@ class ToolFinished:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class TokenPrices:
+    """US dollars per million tokens."""
+
+    input: float
+    output: float
+    cache_write: float
+    cache_read: float
+
+
 @dataclass
 class Usage:
     input_tokens: int = 0
@@ -50,19 +60,29 @@ class Usage:
     cache_write_tokens: int = 0
     output_tokens: int = 0
     model_calls: int = 0
+    cost_usd: float = 0.0  # estimate from list prices
 
     def add(
         self,
+        prices: TokenPrices,
         input_tokens: int,
         cache_read_tokens: int | None,
         cache_write_tokens: int | None,
         output_tokens: int,
     ) -> None:
+        cache_read_tokens = cache_read_tokens or 0
+        cache_write_tokens = cache_write_tokens or 0
         self.input_tokens += input_tokens
-        self.cache_read_tokens += cache_read_tokens or 0
-        self.cache_write_tokens += cache_write_tokens or 0
+        self.cache_read_tokens += cache_read_tokens
+        self.cache_write_tokens += cache_write_tokens
         self.output_tokens += output_tokens
         self.model_calls += 1
+        self.cost_usd += (
+            input_tokens * prices.input
+            + cache_read_tokens * prices.cache_read
+            + cache_write_tokens * prices.cache_write
+            + output_tokens * prices.output
+        ) / 1_000_000
 
 
 @dataclass

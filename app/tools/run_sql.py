@@ -5,8 +5,8 @@ from typing import Any
 
 from anthropic.types.beta import BetaToolParam
 
-from app.bigquery import BigQueryRunner, QueryRejected, QueryResult
-from app.tools.base import ToolContext, ToolError, ToolOutcome
+from app.bigquery import BigQueryRunner, BigQueryUnavailable, QueryRejected, QueryResult
+from app.tools.base import ToolContext, ToolError, ToolOutcome, ToolUnavailable
 
 NAME = "run_sql"
 
@@ -56,6 +56,8 @@ class RunSqlTool:
             result = self._runner.run(query)
         except QueryRejected as exc:
             raise ToolError(str(exc)) from exc
+        except BigQueryUnavailable as exc:
+            raise ToolUnavailable(str(exc)) from exc
 
         content = json.dumps(result_json(result, context.tool_use_id))
         return ToolOutcome(content=content, output=result)

@@ -1,12 +1,15 @@
 """Run the web app: `python -m app.server [--host 127.0.0.1] [--port 8000]`."""
 
 import argparse
+import logging
 
 import uvicorn
 
 from app.api import create_app
 from app.bootstrap import build_session
 from app.config import load_settings
+
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
 def main() -> None:
@@ -15,6 +18,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     uvicorn.run(create_app(build_session(load_settings())), host=args.host, port=args.port)
 
 

@@ -14,12 +14,15 @@ results. If a turn fails midway, the history is rolled back to where it was befo
 so a dangling tool_use without its tool_result can never poison the next request.
 """
 
+import logging
+import time
 from collections.abc import Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
 import anthropic
 from anthropic.types.beta import (
+    BetaContextManagementConfigParam,
     BetaMessage,
     BetaMessageParam,
     BetaTextBlockParam,
@@ -39,7 +42,9 @@ from app.events import (
     Usage,
 )
 from app.history import successful_tool_results
-from app.tools.base import Tool, ToolContext, ToolError
+from app.tools.base import Tool, ToolContext, ToolError, ToolUnavailable
+
+logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_TOKENS = 64_000
 BETAS = [
@@ -51,6 +56,8 @@ BETAS = [
     # Allows setting what happens to stored thinking blocks when the system prompt or tools
     # changed since they were written (see THINKING below).
     "thinking-binding-controls-2026-08-01",
+    # Server-side clearing of old tool results in long conversations (see CONTEXT_MANAGEMENT).
+    "context-management-2025-06-27",
 ]
 # Thinking blocks are tied to the exact system prompt and tools they were produced with. When
 # either changes (a new tool, a prompt edit), older saved conversations would be rejected;
@@ -60,6 +67,22 @@ THINKING: BetaThinkingConfigAdaptiveParam = {
     "display": "updates",
     "block_binding": {"prefix_mismatch_behavior": "drop_block"},
 }
+# Every follow-up resends the whole conversation, and query results are most of it. Once a
+# request passes the trigger size, the API hides older tool results from the model (keeping the
+# most recent ones). Our stored history is untouched, so reopened conversations and charts built
+# from earlier results still work. Clearing invalidates the prompt cache from that point, so it
+# only happens when it frees a meaningful amount.
+CONTEXT_MANAGEMENT: BetaContextManagementConfigParam = {
+    "edits": [
+        {
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "input_tokens", "value": 60_000},
+            "keep": {"type": "tool_uses", "value": 6},
+            "clear_at_least": {"type": "input_tokens", "value": 15_000},
+        }
+    ]
+}
+GENERIC_FAILURE = "Something went wrong while answering. The details are in the server log."
 
 
 class AgentError(Exception):
@@ -96,10 +119,15 @@ class Agent:
         try:
             yield from self._run_loop(usage)
             completed = True
-        except AgentError as exc:
+        except (AgentError, ToolUnavailable) as exc:
             yield TurnFailed(str(exc), usage)
         except anthropic.APIError as exc:
-            yield TurnFailed(f"Claude API error: {exc}", usage)
+            logger.warning("Claude API error: %r", exc)
+            yield TurnFailed(describe_api_error(exc), usage)
+        except Exception:
+            # The boundary for everything the turn does: report it instead of crashing the stream.
+            logger.exception("Unexpected error while answering")
+            yield TurnFailed(GENERIC_FAILURE, usage)
         finally:
             # Also runs if the consumer abandons the generator (e.g. client disconnects).
             if not completed:
@@ -113,6 +141,7 @@ class Agent:
         for _ in range(self._settings.max_agent_steps):
             response = yield from self._stream_response()
             usage.add(
+                self._settings.prices,
                 response.usage.input_tokens,
                 response.usage.cache_read_input_tokens,
                 response.usage.cache_creation_input_tokens,
@@ -153,6 +182,7 @@ class Agent:
             cache_control={"type": "ephemeral"},
             thinking=THINKING,
             output_config={"effort": self._settings.effort},
+            context_management=CONTEXT_MANAGEMENT,
             fallbacks="default",
             betas=BETAS,
         ) as stream:
@@ -179,12 +209,16 @@ class Agent:
         return tool_results
 
     def _run_tool(self, block: Any, results: dict[str, str]) -> tuple[ToolFinished, dict[str, Any]]:
+        """Run one tool call. ToolError goes back to the model to recover from; ToolUnavailable
+        and unexpected exceptions propagate and fail the turn."""
+        started = time.monotonic()
         try:
             tool = self._tools.get(block.name)
             if tool is None:
                 raise ToolError(f"Unknown tool: {block.name}")
             outcome = tool.run(block.input, ToolContext(block.id, results))
         except ToolError as exc:
+            logger.info("tool %s failed in %.1fs: %s", block.name, time.monotonic() - started, exc)
             return (
                 ToolFinished(block.id, block.name, error=str(exc)),
                 {
@@ -194,10 +228,32 @@ class Agent:
                     "is_error": True,
                 },
             )
+        logger.info("tool %s succeeded in %.1fs", block.name, time.monotonic() - started)
         return (
             ToolFinished(block.id, block.name, output=outcome.output),
             {"type": "tool_result", "tool_use_id": block.id, "content": outcome.content},
         )
+
+
+def describe_api_error(exc: anthropic.APIError) -> str:
+    """A message for the user saying what went wrong with the Claude API and what to do."""
+    match exc:
+        case anthropic.AuthenticationError() | anthropic.PermissionDeniedError():
+            return "The Anthropic API key was rejected. Check ANTHROPIC_API_KEY in .env."
+        case anthropic.BadRequestError() if "credit balance" in str(exc).lower():
+            return (
+                "The Anthropic account is out of credit. Add credit at console.anthropic.com "
+                "(Billing), then retry."
+            )
+        case anthropic.RateLimitError():
+            return "Too many requests to Claude right now. Wait a minute, then retry."
+        case anthropic.OverloadedError() | anthropic.InternalServerError():
+            return "Claude is temporarily unavailable. Retry in a moment."
+        case anthropic.APIConnectionError():  # includes timeouts
+            return "Couldn't reach the Claude API. Check the internet connection, then retry."
+        case anthropic.APIStatusError(status_code=status):
+            return f"The Claude API returned an error ({status}). Details are in the server log."
+    return GENERIC_FAILURE
 
 
 def _to_request_json(block: Any) -> dict[str, Any]:

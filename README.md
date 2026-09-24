@@ -100,6 +100,18 @@ rebuilds charts from the saved history when a conversation is reopened. The UI d
 Chart.js (pinned version with a subresource-integrity hash) using a colorblind-validated palette,
 and each chart's exact rows stay visible in the query card above it.
 
+Errors and recovery: SQL mistakes go back to the model to fix. Failures it can't fix end the turn
+with a message saying what to do: Claude API problems (invalid key, no credit, rate limit,
+overloaded, no connection), expired Google credentials, or a turn that couldn't be saved. A failed or
+stopped turn is rolled back, so nothing half-finished is stored, and the UI offers Retry. Anything
+unexpected is logged with its traceback and shown as a short message instead of breaking the
+stream. The server logs one line per tool call and per turn (duration, tokens, estimated cost), and
+each answer in the UI shows its duration and estimated cost.
+
+Long conversations: every follow-up resends the conversation, and query results are most of it.
+Past ~60K input tokens the API clears older tool results from what the model sees (context
+editing); the stored history is untouched, so reopening and charting earlier results still work.
+
 Stored conversations stay usable when the prompt or tools change: thinking blocks are tied to the
 exact prompt and tools they were produced with, and the agent asks the API to drop stale ones
 (`prefix_mismatch_behavior: "drop_block"`) instead of rejecting the conversation.

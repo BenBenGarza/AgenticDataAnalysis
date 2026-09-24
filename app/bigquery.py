@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from google.api_core import exceptions as gcp_exceptions
+from google.auth import exceptions as auth_exceptions
 from google.cloud import bigquery
 
 # Results are small; the REST fallback is fine. Silence the Storage API hint.
@@ -21,6 +22,16 @@ warnings.filterwarnings("ignore", message="BigQuery Storage module not found")
 
 class QueryRejected(Exception):
     """The query is invalid or not allowed. The message is written for the model to act on."""
+
+
+class BigQueryUnavailable(Exception):
+    """BigQuery can't be used at all (e.g. expired credentials). The message is for the user."""
+
+
+CREDENTIALS_MESSAGE = (
+    "Google Cloud credentials are missing or expired, so BigQuery can't be queried. "
+    "Run `gcloud auth application-default login` on the server, then retry."
+)
 
 
 @dataclass
@@ -58,6 +69,8 @@ class BigQueryRunner:
         try:
             job = self._client.query(sql, job_config=config)
             row_iter = job.result(max_results=self._max_rows)
+        except auth_exceptions.GoogleAuthError as exc:
+            raise BigQueryUnavailable(CREDENTIALS_MESSAGE) from exc
         except gcp_exceptions.GoogleAPICallError as exc:
             raise QueryRejected(f"BigQuery error: {_error_message(exc)}") from exc
 
@@ -74,6 +87,8 @@ class BigQueryRunner:
         config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
         try:
             job = self._client.query(sql, job_config=config)
+        except auth_exceptions.GoogleAuthError as exc:
+            raise BigQueryUnavailable(CREDENTIALS_MESSAGE) from exc
         except gcp_exceptions.GoogleAPICallError as exc:
             raise QueryRejected(f"Invalid SQL: {_error_message(exc)}") from exc
         if job.statement_type != "SELECT":

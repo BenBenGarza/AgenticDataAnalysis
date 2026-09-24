@@ -25,13 +25,15 @@ from app.tools.base import ToolContext, ToolError, ToolOutcome
 # ---- A stand-in for the whole Agent (used by session and API tests) ----------------------
 
 FAILING_QUESTION = "fail"
+CRASHING_QUESTION = "crash"
 CHART_QUESTION = "chart it"
 
 
 class FakeAgent:
     """Answers every question with one query and a text answer, shaped like a real turn.
 
-    FAILING_QUESTION produces a failed turn instead; CHART_QUESTION also charts the result.
+    FAILING_QUESTION produces a failed turn instead, CRASHING_QUESTION raises an unexpected
+    exception, and CHART_QUESTION also charts the result.
     """
 
     def __init__(self, messages: list[Message]):
@@ -41,6 +43,8 @@ class FakeAgent:
         if question == FAILING_QUESTION:
             yield TurnFailed("boom")
             return
+        if question == CRASHING_QUESTION:
+            raise RuntimeError("unexpected bug")
         n = len(self.messages)
         query_id, chart_id = f"toolu_{n}", f"toolu_{n}_chart"
         query_input = {"query": "SELECT day, revenue", "purpose": f"check {question}"}

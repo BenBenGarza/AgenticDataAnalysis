@@ -1,10 +1,12 @@
 import json
+import sqlite3
 
 import pytest
 
 from app.events import ToolStarted, TurnFailed, TurnFinished
 from app.session import (
     BUSY_MESSAGE,
+    SAVE_FAILED_MESSAGE,
     ChartBlock,
     ChatSession,
     DisplayTurn,
@@ -150,6 +152,24 @@ def test_session_is_free_again_after_a_turn_ends_or_is_abandoned(store, question
     next(abandoned)
     abandoned.close()
     session.new_chat()
+
+
+def test_a_turn_that_cannot_be_saved_is_reported_and_discarded(store, monkeypatch):
+    session = ChatSession(store, FakeAgent, MODEL)
+    _ask(session, "saved")
+
+    def disk_full(*args):
+        raise sqlite3.OperationalError("database or disk is full")
+
+    monkeypatch.setattr(store, "append_messages", disk_full)
+    events = _ask(session, "not saved")
+
+    assert events[-1] == TurnFailed(SAVE_FAILED_MESSAGE)
+    assert [t.question for t in session.display_turns()] == ["saved"]  # memory matches storage
+
+    monkeypatch.undo()
+    _ask(session, "saved again")  # the session keeps working
+    assert [t.question for t in session.display_turns()] == ["saved", "saved again"]
 
 
 def test_display_turns_rebuild_text_queries_and_charts_in_order():

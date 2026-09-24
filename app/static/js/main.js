@@ -40,7 +40,7 @@ async function ask(question) {
         case "done":
           finished = true;
           turn.finish();
-          turn.showDuration();
+          turn.showSummary(data.usage);
           setConversation(data.conversation);
           refreshConversations();
           break;

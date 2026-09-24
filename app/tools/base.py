@@ -15,6 +15,11 @@ class ToolError(Exception):
     """The tool call could not be completed. The message is returned to the model to act on."""
 
 
+class ToolUnavailable(Exception):
+    """The tool can't run at all (e.g. expired credentials), so the model can't fix it by
+    trying again. The turn fails and the message is shown to the user."""
+
+
 @dataclass
 class ToolOutcome:
     content: str  # what the model sees as the tool result

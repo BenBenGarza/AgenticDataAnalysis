@@ -3,10 +3,10 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api import MAX_QUESTION_CHARS, create_app
+from app.api import MAX_QUESTION_CHARS, STREAM_FAILED_MESSAGE, create_app
 from app.session import ChatSession
 from app.storage import ConversationStore
-from tests.fakes import CHART_QUESTION, FAILING_QUESTION, FakeAgent
+from tests.fakes import CHART_QUESTION, CRASHING_QUESTION, FAILING_QUESTION, FakeAgent
 
 
 @pytest.fixture
@@ -171,3 +171,8 @@ def test_changes_are_refused_with_409_while_an_answer_is_in_progress(
     assert response.status_code == 409
     assert "An answer is in progress" in response.json()["detail"]
     answer_in_progress.close()
+
+
+def test_unexpected_error_mid_stream_reaches_the_browser_as_an_error_event(client):
+    assert _chat(client, CRASHING_QUESTION) == [("error", {"message": STREAM_FAILED_MESSAGE})]
+    assert client.post("/api/session/new").status_code == 204  # the session was released

@@ -8,13 +8,15 @@ it (another question, switching, a new chat, deleting). Several browser tabs sha
 session, so the rule has to be enforced here rather than trusted to each client.
 """
 
+import logging
 import threading
+import time
 from collections.abc import Callable, Generator
 from contextlib import closing
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.events import Event, Message, TurnFailed, TurnFinished
+from app.events import Event, Message, ToolStarted, TurnFailed, TurnFinished, Usage
 from app.history import failed_tool_results, successful_tool_results
 from app.storage import DEFAULT_USER_ID, Conversation, ConversationStore
 from app.tools import create_chart, run_sql
@@ -32,7 +34,10 @@ class ConversationAgent(Protocol):
 # Builds an agent that continues from the given message history.
 AgentFactory = Callable[[list[Message]], ConversationAgent]
 
+logger = logging.getLogger(__name__)
+
 BUSY_MESSAGE = "An answer is in progress. Wait for it to finish or press Stop."
+SAVE_FAILED_MESSAGE = "The answer couldn't be saved, so it was discarded. Please retry."
 
 
 class SessionBusy(Exception):
@@ -114,12 +119,29 @@ class ChatSession:
                 yield TurnFailed(BUSY_MESSAGE)
                 return
             self._busy = True
+        started = time.monotonic()
+        tools_used: list[str] = []
         try:
             conversation = self.conversation  # save to where the turn started, whatever happens
             with closing(self._agent.ask(question)) as events:
                 for event in events:
-                    if isinstance(event, TurnFinished):
-                        conversation = self._save_turn(conversation, question, event.new_messages)
+                    if isinstance(event, ToolStarted):
+                        tools_used.append(event.name)
+                    elif isinstance(event, TurnFinished):
+                        try:
+                            conversation = self._save_turn(
+                                conversation, question, event.new_messages
+                            )
+                        except Exception:
+                            logger.exception("Could not save the turn")
+                            # The agent's memory holds the unsaved turn; reload it from storage so
+                            # memory and database agree, and never report an unsaved answer as done.
+                            self._agent = self._new_agent()
+                            yield TurnFailed(SAVE_FAILED_MESSAGE, event.usage)
+                            return
+                        _log_turn("finished", conversation, started, tools_used, event.usage)
+                    elif isinstance(event, TurnFailed):
+                        _log_turn("failed", conversation, started, tools_used, event.usage)
                     yield event
         finally:
             self._busy = False
@@ -224,3 +246,26 @@ def _rebuild_chart(spec: dict[str, Any], results: dict[str, str]) -> create_char
         return create_chart.build_chart(spec, results)
     except ToolError:
         return None  # it was valid when shown; if its source result is unreadable, skip it
+
+
+def _log_turn(
+    outcome: str,
+    conversation: Conversation | None,
+    started: float,
+    tools_used: list[str],
+    usage: Usage,
+) -> None:
+    logger.info(
+        "turn %s: conversation=%s duration=%.1fs model_calls=%d tools=%s tokens(in=%d "
+        "cache_read=%d cache_write=%d out=%d) cost=$%.3f",
+        outcome,
+        conversation.id if conversation else "new",
+        time.monotonic() - started,
+        usage.model_calls,
+        ",".join(tools_used) or "none",
+        usage.input_tokens,
+        usage.cache_read_tokens,
+        usage.cache_write_tokens,
+        usage.output_tokens,
+        usage.cost_usd,
+    )

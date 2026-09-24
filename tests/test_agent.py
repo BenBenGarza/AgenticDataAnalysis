@@ -4,9 +4,10 @@ import anthropic
 import httpx
 import pytest
 
-from app.agent import Agent
+from app.agent import GENERIC_FAILURE, Agent, describe_api_error
 from app.config import Settings
 from app.events import TextDelta, ToolFinished, ToolStarted, TurnFailed, TurnFinished
+from app.tools.base import ToolUnavailable
 from tests.fakes import FakeAnthropic, FakeTool, reply, text, tool_use
 
 SETTINGS = Settings(gcp_project="test", max_agent_steps=3)
@@ -143,7 +144,7 @@ def test_parallel_tool_calls_return_all_results_in_one_message_in_order():
             anthropic.APIConnectionError(
                 request=httpx.Request("POST", "https://api.anthropic.com")
             ),
-            "Claude API error",
+            "Couldn't reach the Claude API",
         ),
     ],
 )
@@ -224,3 +225,76 @@ def test_stale_thinking_is_dropped_rather_than_rejected():
     request = client.requests[0]
     assert request["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
     assert "thinking-binding-controls-2026-08-01" in request["betas"]
+
+
+def _api_error(cls, status: int, message: str = "error"):
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return cls(message, response=httpx.Response(status, request=request), body=None)
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (_api_error(anthropic.AuthenticationError, 401), "API key was rejected"),
+        (
+            _api_error(anthropic.BadRequestError, 400, "Your credit balance is too low"),
+            "out of credit",
+        ),
+        (_api_error(anthropic.RateLimitError, 429), "Too many requests"),
+        (_api_error(anthropic.OverloadedError, 529), "temporarily unavailable"),
+        (_api_error(anthropic.InternalServerError, 500), "temporarily unavailable"),
+        (_api_error(anthropic.APIStatusError, 418), "returned an error (418)"),
+        (
+            anthropic.APITimeoutError(request=httpx.Request("POST", "https://api.anthropic.com")),
+            "Couldn't reach the Claude API",
+        ),
+    ],
+)
+def test_api_errors_become_actionable_messages(error, expected):
+    assert expected in describe_api_error(error)
+
+
+class _BrokenTool(FakeTool):
+    def __init__(self, error: Exception):
+        super().__init__()
+        self._error = error
+
+    def run(self, tool_input, context):
+        raise self._error
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (ToolUnavailable("Google Cloud credentials are missing or expired"), "credentials"),
+        (RuntimeError("bug"), GENERIC_FAILURE),  # details go to the log, not the user
+    ],
+)
+def test_tools_that_cannot_run_fail_the_turn_and_roll_back(error, expected):
+    client = FakeAnthropic(reply(tool_use("t1", "lookup", {"key": "a"})), reply(text("never")))
+    agent = _agent(client, _BrokenTool(error))
+
+    events = _run(agent)
+
+    assert isinstance(events[-1], TurnFailed) and expected in events[-1].message
+    assert agent.messages == []
+    assert len(client.requests) == 1  # the model wasn't asked to retry something it can't fix
+
+
+def test_usage_accumulates_tokens_and_estimated_cost():
+    client = FakeAnthropic(reply(tool_use("t1", "lookup", {"key": "a"})), reply(text("ok")))
+
+    usage = _run(_agent(client))[-1].usage
+
+    # Each fake reply: 10 input, 100 cache-read, 5 output tokens, at Opus 5.5 list prices.
+    per_call = (10 * 4.0 + 100 * 0.20 + 5 * 20.0) / 1_000_000
+    assert (usage.model_calls, usage.input_tokens, usage.output_tokens) == (2, 20, 10)
+    assert usage.cost_usd == pytest.approx(2 * per_call)
+
+
+def test_old_tool_results_are_cleared_server_side_in_long_conversations():
+    client = FakeAnthropic(reply(text("ok")))
+    _run(_agent(client))
+    (edit,) = client.requests[0]["context_management"]["edits"]
+    assert edit["type"] == "clear_tool_uses_20250919"
+    assert "context-management-2025-06-27" in client.requests[0]["betas"]

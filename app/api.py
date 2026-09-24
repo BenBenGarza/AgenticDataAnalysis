@@ -6,6 +6,7 @@ time (see README), so one ChatSession serves every request.
 """
 
 import json
+import logging
 from collections.abc import AsyncIterator, Generator
 from dataclasses import asdict
 from pathlib import Path
@@ -31,7 +32,10 @@ from app.session import ChatSession, SessionBusy
 from app.storage import Conversation, ConversationNotFound
 from app.tools import create_chart, run_sql
 
+logger = logging.getLogger(__name__)
+
 MAX_QUESTION_CHARS = 4_000
+STREAM_FAILED_MESSAGE = "Something went wrong on the server. Please retry."
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
@@ -98,6 +102,10 @@ async def _stream(events: Generator[Event, None, None], session: ChatSession) ->
         while (event := await run_in_threadpool(next, events, None)) is not None:
             if (message := _to_sse(event, session)) is not None:
                 yield message
+    except Exception:
+        # Headers are already sent, so the failure has to travel as an event, not a status code.
+        logger.exception("Streaming the answer failed")
+        yield _sse("error", {"message": STREAM_FAILED_MESSAGE})
     finally:
         events.close()
 

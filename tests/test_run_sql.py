@@ -6,9 +6,10 @@ from typing import Any
 
 import pytest
 from google.api_core import exceptions as gcp_exceptions
+from google.auth import exceptions as auth_exceptions
 
-from app.bigquery import BigQueryRunner, QueryRejected
-from app.tools.base import ToolContext, ToolError
+from app.bigquery import BigQueryRunner, BigQueryUnavailable, QueryRejected
+from app.tools.base import ToolContext, ToolError, ToolUnavailable
 from app.tools.run_sql import RunSqlTool
 
 GB = 1024**3
@@ -141,3 +142,12 @@ def test_tool_turns_rejections_into_tool_errors():
 def test_tool_rejects_missing_or_invalid_query(tool_input):
     with pytest.raises(ToolError, match="non-empty SQL string"):
         RunSqlTool(_runner(FakeBigQueryClient())).run(tool_input, CONTEXT)
+
+
+def test_expired_credentials_make_the_tool_unavailable_with_the_fix():
+    client = FakeBigQueryClient(error=auth_exceptions.RefreshError("Reauthentication is needed"))
+
+    with pytest.raises(BigQueryUnavailable, match="gcloud auth application-default login"):
+        _runner(client).run("SELECT 1")
+    with pytest.raises(ToolUnavailable, match="credentials are missing or expired"):
+        RunSqlTool(_runner(client)).run({"query": "SELECT 1", "purpose": "x"}, CONTEXT)

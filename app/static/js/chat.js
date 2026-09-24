@@ -118,9 +118,10 @@ class TurnView {
     this._answerEl.classList.remove("pending");
   }
 
-  showDuration() {
+  showSummary(usage) {
     const seconds = ((performance.now() - this._startedAt) / 1000).toFixed(0);
-    this._answerEl.append(element("div", "meta", `Answered in ${seconds}s`));
+    const cost = usage.cost_usd < 0.01 ? "<$0.01" : `$${usage.cost_usd.toFixed(2)}`;
+    this._answerEl.append(element("div", "meta", `Answered in ${seconds}s · about ${cost}`));
   }
 
   fail(message, onRetry) {
