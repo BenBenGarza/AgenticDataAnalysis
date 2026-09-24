@@ -1,4 +1,6 @@
 anthropic>=1.8
+fastapi>=0.141
+uvicorn>=0.53
 google-cloud-bigquery>=3.45
 python-dotenv>=1.0
 # Only needed by scripts/ (DataFrame previews)

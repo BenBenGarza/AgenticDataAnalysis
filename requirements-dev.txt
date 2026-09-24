@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest
+# Used by FastAPI's TestClient
+httpx

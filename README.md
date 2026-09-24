@@ -37,6 +37,21 @@ Requirements: Python 3.11+ and the [Google Cloud CLI](https://cloud.google.com/s
 
 ## Usage
 
+Web API (the chat UI will be served from the same server):
+
+```bash
+.venv/bin/python -m app.server        # http://127.0.0.1:8000, interactive API docs at /docs
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/session` | Active conversation and its turns (what the UI loads on open) |
+| `POST /api/chat` `{"question": ...}` | Ask in the active conversation; streams Server-Sent Events: `text`, `progress`, `query_started`, `query_finished`, then `done` or `error` |
+| `POST /api/session/new` | Start a new conversation |
+| `GET /api/conversations` | Conversation history, newest first |
+| `POST /api/conversations/{id}/open` | Continue an earlier conversation |
+| `DELETE /api/conversations/{id}` | Delete (soft) a conversation |
+
 Terminal chat (`--show-sql` prints each query the agent runs):
 
 ```bash
@@ -81,6 +96,8 @@ app/
   agent.py                Agent loop, tool definition, streamed events
   bigquery_tool.py        Read-only query execution with dry-run guardrails
   prompts.py              System prompt assembled from docs/
+  api.py                  HTTP endpoints; streams agent events as Server-Sent Events
+  server.py               Starts the web server
   session.py              Active conversation: connects the agent to storage
   storage.py              SQLite conversation history (users, conversations, messages)
   config.py               Settings from environment / .env
@@ -88,7 +105,7 @@ app/
 docs/
   dataset_notes.md        What the data looks like, its pitfalls and obfuscation (basis for the system prompt)
   example_queries.sql     Validated SQL for common analyses (funnel, channels, products, cohorts, ...)
-tests/                    Unit tests for storage and sessions (no external calls)
+tests/                    Unit tests for storage, sessions and the API (no external calls)
 scripts/
   check_bigquery.py       Connection smoke test
   validate_examples.py    Runs the example queries; --dry-run checks syntax and cost for free

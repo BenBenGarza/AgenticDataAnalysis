@@ -2,42 +2,13 @@ from dataclasses import replace
 
 import pytest
 
-from app.agent import TurnFailed, TurnFinished, Usage
+from app.agent import ToolStarted
 from app.config import Settings
 from app.session import ChatSession, DisplayTurn, to_display_turns
 from app.storage import ConversationStore
+from tests.fakes import FAILING_QUESTION, FakeAgent
 
 SETTINGS = Settings(gcp_project="test-project")
-
-
-class FakeAgent:
-    """Answers every question with one query and a text answer, like a real turn."""
-
-    fail_next = False
-
-    def __init__(self, settings, messages):
-        self.messages = list(messages)
-
-    def ask(self, question):
-        if FakeAgent.fail_next:
-            FakeAgent.fail_next = False
-            yield TurnFailed("boom")
-            return
-        n = len(self.messages)
-        new = [
-            {"role": "user", "content": question},
-            {"role": "assistant", "content": [
-                {"type": "thinking", "thinking": "", "signature": f"sig{n}"},
-                {"type": "tool_use", "id": f"toolu_{n}", "name": "run_sql",
-                 "input": {"query": "SELECT 1", "purpose": f"check {question}"}},
-            ]},
-            {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": f"toolu_{n}", "content": "{}"},
-            ]},
-            {"role": "assistant", "content": [{"type": "text", "text": f"answer to {question}"}]},
-        ]
-        self.messages.extend(new)
-        yield TurnFinished(Usage(), new)
 
 
 @pytest.fixture
@@ -64,9 +35,8 @@ def test_first_completed_turn_creates_and_activates_the_conversation(store):
 
 def test_failed_turn_saves_nothing(store):
     session = ChatSession(SETTINGS, store, agent_factory=FakeAgent)
-    FakeAgent.fail_next = True
 
-    _ask(session, "This fails")
+    _ask(session, FAILING_QUESTION)
 
     assert session.conversation is None
     assert store.list_conversations(1) == []
@@ -116,6 +86,17 @@ def test_conversation_records_the_model(store):
     session = ChatSession(replace(SETTINGS, model="claude-opus-5-5"), store, agent_factory=FakeAgent)
     _ask(session, "q")
     assert session.conversation.model == "claude-opus-5-5"
+
+
+def test_abandoning_a_turn_midway_saves_nothing(store):
+    # e.g. the browser disconnects while the answer is streaming
+    session = ChatSession(SETTINGS, store, agent_factory=FakeAgent)
+    events = session.ask("q")
+    assert isinstance(next(events), ToolStarted)  # the turn is under way
+    events.close()
+
+    assert session.conversation is None
+    assert store.list_conversations(1) == []
 
 
 def test_display_turns_rebuilds_questions_queries_and_answers():

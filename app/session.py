@@ -5,6 +5,7 @@ Both the terminal client and the web API drive the app through this class.
 """
 
 from collections.abc import Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,11 +33,16 @@ class ChatSession:
         self._agent = self._new_agent()
 
     def ask(self, question: str) -> Iterator[Event]:
-        """Run one turn; the turn is saved before TurnFinished is passed on."""
-        for event in self._agent.ask(question):
-            if isinstance(event, TurnFinished):
-                self._save_turn(question, event.new_messages)
-            yield event
+        """Run one turn; the turn is saved before TurnFinished is passed on.
+
+        Closing this generator early (e.g. the client disconnected) closes the agent's turn
+        too, which rolls it back; nothing is saved.
+        """
+        with closing(self._agent.ask(question)) as events:
+            for event in events:
+                if isinstance(event, TurnFinished):
+                    self._save_turn(question, event.new_messages)
+                yield event
 
     def new_chat(self) -> None:
         self._store.set_active_conversation(self._user_id, None)
