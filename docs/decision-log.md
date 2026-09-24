@@ -23,8 +23,9 @@
 - **Hosted deployment**: it would spend my API credit, so it first needs auth and a spending cap.
 - **Authentication and multi-user support** (schema ready), and **a code-execution tool** for
   statistics or forecasting.
-- **A systematic evaluation set**: I checked quality with ~20 real questions (follow-ups, charts,
-  restarts, stop, failures) plus 107 automated tests that fake Claude and BigQuery.
+- **A graded evaluation set**: instead, a re-runnable script runs 10 example conversations through
+  the real app ([example-conversations.md](example-conversations.md)), plus 107 automated tests
+  that fake Claude and BigQuery.
 - **JavaScript unit tests**: the UI and the renderer's injection safety were tested in a browser.
 - **Export, regenerate and rename**, and per-conversation budgets.
 

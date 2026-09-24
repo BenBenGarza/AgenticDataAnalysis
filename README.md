@@ -201,12 +201,14 @@ app/
     js/dom.js             Element helper
 docs/
   decision-log.md         Assumptions, cuts, problems solved, and next steps (one page)
+  example-conversations.md  Real example conversations: answers, queries, charts, time and cost
   dataset_notes.md        What the data looks like, its pitfalls and obfuscation (basis for the system prompt)
   example_queries.sql     Validated SQL for common analyses (funnel, channels, products, cohorts, ...)
 tests/                    Agent loop, tools, storage, sessions and API, with fakes (no external calls)
 scripts/                  (need requirements-dev.txt)
   encode_google_credentials.py  Turns a Google credentials JSON file into the .env line
   validate_examples.py    Runs the example queries; --dry-run checks syntax and cost for free
+  run_example_conversations.py  Runs 10 example questions through the real app into a report (~$1)
 Dockerfile                Production image: Python 3.12 slim, non-root user, health check
 docker-compose.yml        One-command run: .env, read-only Google credentials, data volume
 ```
