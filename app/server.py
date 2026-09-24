@@ -7,7 +7,7 @@ import uvicorn
 
 from app.api import create_app
 from app.bootstrap import build_session
-from app.config import load_settings
+from app.config import ConfigError, load_settings
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
@@ -19,7 +19,11 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
-    uvicorn.run(create_app(build_session(load_settings())), host=args.host, port=args.port)
+    try:
+        session = build_session(load_settings())
+    except ConfigError as exc:
+        raise SystemExit(f"Configuration error: {exc}") from None
+    uvicorn.run(create_app(session), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

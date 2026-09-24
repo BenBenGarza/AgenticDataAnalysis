@@ -149,5 +149,5 @@ def test_expired_credentials_make_the_tool_unavailable_with_the_fix():
 
     with pytest.raises(BigQueryUnavailable, match="gcloud auth application-default login"):
         _runner(client).run("SELECT 1")
-    with pytest.raises(ToolUnavailable, match="credentials are missing or expired"):
+    with pytest.raises(ToolUnavailable, match="credentials are missing, expired or revoked"):
         RunSqlTool(_runner(client)).run({"query": "SELECT 1", "purpose": "x"}, CONTEXT)

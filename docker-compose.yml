@@ -1,0 +1,19 @@
+# Run the app: `docker compose up --build`, then open http://localhost:8000
+#
+# All configuration, including credentials, comes from .env on the machine running it (see
+# .env.example); nothing secret is baked into the image.
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      # Optional so that, when it's missing, the app starts and says what to set instead of
+      # Compose failing with a bare "file not found".
+      - path: .env
+        required: false
+    volumes:
+      - app-data:/app/data  # conversation history survives restarts and rebuilds
+
+volumes:
+  app-data:

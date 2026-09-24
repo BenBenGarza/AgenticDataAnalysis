@@ -9,7 +9,7 @@ import sys
 
 from app.bigquery import QueryResult
 from app.bootstrap import build_session
-from app.config import load_settings
+from app.config import ConfigError, load_settings
 from app.events import (
     Event,
     ProgressDelta,
@@ -41,7 +41,10 @@ def main() -> None:
     parser.add_argument("--show-sql", action="store_true", help="print each query the agent runs")
     args = parser.parse_args()
 
-    session = build_session(load_settings())
+    try:
+        session = build_session(load_settings())
+    except ConfigError as exc:
+        raise SystemExit(f"Configuration error: {exc}") from None
     print("Ask a question about the Google Merchandise Store data (/help for commands).")
     if session.conversation:
         _show_conversation(session, last_turns=1)

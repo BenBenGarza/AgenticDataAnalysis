@@ -29,8 +29,9 @@ class BigQueryUnavailable(Exception):
 
 
 CREDENTIALS_MESSAGE = (
-    "Google Cloud credentials are missing or expired, so BigQuery can't be queried. "
-    "Run `gcloud auth application-default login` on the server, then retry."
+    "Google Cloud credentials are missing, expired or revoked, so BigQuery can't be queried. "
+    "Update GOOGLE_CREDENTIALS_BASE64 in .env or run `gcloud auth application-default login` "
+    "on the server, then restart and retry."
 )
 
 

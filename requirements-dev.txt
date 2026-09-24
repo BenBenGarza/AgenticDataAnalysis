@@ -4,3 +4,5 @@ pytest
 httpx
 ruff
 mypy
+# Used by scripts/ for DataFrame previews of query results
+db-dtypes

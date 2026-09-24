@@ -6,33 +6,65 @@ Users ask questions in a chat; an agent queries BigQuery and answers with charts
 
 > Work in progress. Working: the agent, charts, persistence, the web API and the chat UI.
 
-## Setup
+## Quick start
 
-Requirements: Python 3.11+ and the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
+You need a **Google Cloud project** (the free BigQuery sandbox is enough; the dataset is public)
+and an **Anthropic API key**. All configuration lives in `.env`, which is git-ignored and never
+copied into the Docker image.
 
-1. **Authenticate with Google Cloud** (no key file needed; uses Application Default Credentials):
+**1. Configure:** copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`, then give the app
+Google Cloud access in one of two ways:
 
-   ```bash
-   gcloud auth application-default login
-   gcloud auth application-default set-quota-project YOUR_PROJECT_ID
-   ```
+- **A service-account key in `.env`** (works with Docker and Python, and is the way to share
+  access): create a service account in your project with only the **BigQuery Job User** role,
+  add a JSON key for it, and append it to `.env`:
 
-   The dataset is public; the free BigQuery sandbox (1 TB of queries per month) is enough.
+  ```bash
+  python3 scripts/encode_google_credentials.py path/to/key.json >> .env
+  ```
 
-2. **Install dependencies:**
+  The key names its project, so `GOOGLE_CLOUD_PROJECT` is optional here. Delete the key in the
+  Cloud console when it's no longer needed.
 
-   ```bash
-   python3 -m venv .venv
-   .venv/bin/pip install -r requirements.txt
-   ```
+- **Your own gcloud login** (Python only): set `GOOGLE_CLOUD_PROJECT` in `.env` and run
 
-3. **Configure:** copy `.env.example` to `.env` and set `GOOGLE_CLOUD_PROJECT` and `ANTHROPIC_API_KEY`.
+  ```bash
+  gcloud auth application-default login
+  gcloud auth application-default set-quota-project YOUR_PROJECT_ID
+  ```
 
-4. **Check the connection:**
+**2. Run it**, then open **http://localhost:8000**:
 
-   ```bash
-   GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID .venv/bin/python scripts/check_bigquery.py
-   ```
+- **With Docker** (needs Docker Desktop or Docker Engine, and the key in `.env`):
+
+  ```bash
+  docker compose up --build
+  ```
+
+  Conversations are kept in a Docker volume across restarts (`docker compose down -v` deletes
+  them).
+
+- **With Python 3.12+:**
+
+  ```bash
+  python3 -m venv .venv
+  .venv/bin/pip install -r requirements.txt
+  .venv/bin/python -m app.server
+  ```
+
+  Conversations are kept in `data/app.db`.
+
+### Troubleshooting
+
+| Message or symptom | Fix |
+|---|---|
+| `Configuration error: GOOGLE_CLOUD_PROJECT is not set` (or `ANTHROPIC_API_KEY`) | Create `.env` from `.env.example` in the project folder |
+| `Configuration error: No usable Google Cloud credentials` | Add `GOOGLE_CREDENTIALS_BASE64` to `.env` (step 1); with Python you can instead run `gcloud auth application-default login` |
+| `Configuration error: GOOGLE_CREDENTIALS_BASE64 is not a base64-encoded JSON file` | Regenerate the line with `scripts/encode_google_credentials.py` |
+| "Google Cloud credentials are missing, expired or revoked" in the chat | The key was deleted or the gcloud login expired: replace the key in `.env` or rerun the gcloud login, then restart |
+| A query fails with `Access Denied` / `bigquery.jobs.create permission` | `GOOGLE_CLOUD_PROJECT` must be a project your Google account can run jobs in (usually your own) |
+| "The Anthropic API key was rejected" / "out of credit" in the chat | Check the key in `.env` / add credit at console.anthropic.com |
+| Port 8000 already in use | Stop the other process, or change the port (`"8080:8000"` in `docker-compose.yml`, or `--port 8080`) |
 
 ## Usage
 
@@ -67,7 +99,7 @@ Terminal chat (`--show-sql` prints each query the agent runs):
 Conversations are saved to `data/app.db` (SQLite, created on first run), so quitting and restarting
 continues the last conversation. In the chat: `/new`, `/list`, `/open ID`, `/delete ID`, `/help`.
 
-Development checks (tests make no API or BigQuery calls):
+Development (Python setup above, plus dev tools; tests make no API or BigQuery calls):
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
@@ -155,12 +187,16 @@ app/
     js/markdown.js        Safe Markdown renderer
     js/dom.js             Element helper
 docs/
+  decision-log.md         Assumptions, cuts, problems solved, and next steps (one page)
   dataset_notes.md        What the data looks like, its pitfalls and obfuscation (basis for the system prompt)
   example_queries.sql     Validated SQL for common analyses (funnel, channels, products, cohorts, ...)
 tests/                    Agent loop, tools, storage, sessions and API, with fakes (no external calls)
-scripts/
+scripts/                  (need requirements-dev.txt)
   check_bigquery.py       Connection smoke test
+  encode_google_credentials.py  Turns a Google credentials JSON file into the .env line
   validate_examples.py    Runs the example queries; --dry-run checks syntax and cost for free
+Dockerfile                Production image: Python 3.12 slim, non-root user, health check
+docker-compose.yml        One-command run: .env, read-only Google credentials, data volume
 ```
 
 ## Cost

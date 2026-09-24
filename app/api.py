@@ -56,6 +56,10 @@ def create_app(session: ChatSession) -> FastAPI:
     async def session_busy(request: Request, exc: SessionBusy) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=409)
 
+    @app.get("/api/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
     @app.get("/api/session")
     def get_session() -> dict[str, Any]:
         return _session_view(session)

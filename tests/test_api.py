@@ -176,3 +176,7 @@ def test_changes_are_refused_with_409_while_an_answer_is_in_progress(
 def test_unexpected_error_mid_stream_reaches_the_browser_as_an_error_event(client):
     assert _chat(client, CRASHING_QUESTION) == [("error", {"message": STREAM_FAILED_MESSAGE})]
     assert client.post("/api/session/new").status_code == 204  # the session was released
+
+
+def test_health_check(client):
+    assert client.get("/api/health").json() == {"status": "ok"}

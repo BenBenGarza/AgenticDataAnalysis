@@ -1,0 +1,13 @@
+# Keep secrets, local data and development files out of the image.
+.env
+data/
+.venv/
+.git/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/
+scripts/
+*.md
+!docs/*.md
