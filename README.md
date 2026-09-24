@@ -8,6 +8,18 @@ continued. Design decisions and trade-offs are in [docs/decision-log.md](docs/de
 
 ## Quick start
 
+### Running with a provided `.env` file
+
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it.
+2. Get the code: `git clone https://github.com/BenBenGarza/AgenticDataAnalysis.git` (or download
+   the ZIP from GitHub and unzip it).
+3. Put the `.env` file in the project folder, next to `docker-compose.yml`. It must be named
+   exactly `.env` (email or downloads sometimes rename it to `env` or `env.txt`).
+4. In that folder, run `docker compose up --build`. The first build takes 1–2 minutes.
+5. Open **http://localhost:8000**. Stop it with Ctrl+C, or `docker compose down`.
+
+### Setting up your own credentials
+
 You need a **Google Cloud project** (the free BigQuery sandbox is enough; the dataset is public)
 and an **Anthropic API key**. All configuration lives in `.env`, which is git-ignored and never
 copied into the Docker image.

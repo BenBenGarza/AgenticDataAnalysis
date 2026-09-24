@@ -28,25 +28,16 @@ ORDER BY day;
 
 -- name: purchase_funnel
 -- question: What does the purchase funnel look like and where do users drop off?
-WITH steps AS (
-  SELECT
-    COUNT(DISTINCT IF(event_name = 'view_item', user_pseudo_id, NULL)) AS view_item,
-    COUNT(DISTINCT IF(event_name = 'add_to_cart', user_pseudo_id, NULL)) AS add_to_cart,
-    COUNT(DISTINCT IF(event_name = 'begin_checkout', user_pseudo_id, NULL)) AS begin_checkout,
-    COUNT(DISTINCT IF(event_name = 'add_shipping_info', user_pseudo_id, NULL)) AS add_shipping_info,
-    COUNT(DISTINCT IF(event_name = 'add_payment_info', user_pseudo_id, NULL)) AS add_payment_info,
-    COUNT(DISTINCT IF(event_name = 'purchase', user_pseudo_id, NULL)) AS purchase
-  FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`
-  WHERE _TABLE_SUFFIX BETWEEN '20201101' AND '20210131'
-)
-SELECT step, users, ROUND(users / FIRST_VALUE(users) OVER (ORDER BY step_order), 4) AS pct_of_first_step
-FROM steps
-UNPIVOT (users FOR step IN (view_item, add_to_cart, begin_checkout, add_shipping_info, add_payment_info, purchase))
-JOIN UNNEST([
-  STRUCT('view_item' AS s, 1 AS step_order), ('add_to_cart', 2), ('begin_checkout', 3),
-  ('add_shipping_info', 4), ('add_payment_info', 5), ('purchase', 6)
-]) ON s = step
-ORDER BY step_order;
+-- One row with the number of users reaching each step; drop-off is each step divided by the one before.
+SELECT
+  COUNT(DISTINCT IF(event_name = 'view_item', user_pseudo_id, NULL)) AS viewed_item,
+  COUNT(DISTINCT IF(event_name = 'add_to_cart', user_pseudo_id, NULL)) AS added_to_cart,
+  COUNT(DISTINCT IF(event_name = 'begin_checkout', user_pseudo_id, NULL)) AS began_checkout,
+  COUNT(DISTINCT IF(event_name = 'add_shipping_info', user_pseudo_id, NULL)) AS added_shipping,
+  COUNT(DISTINCT IF(event_name = 'add_payment_info', user_pseudo_id, NULL)) AS added_payment,
+  COUNT(DISTINCT IF(event_name = 'purchase', user_pseudo_id, NULL)) AS purchased
+FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`
+WHERE _TABLE_SUFFIX BETWEEN '20201101' AND '20210131';
 
 
 -- name: channel_performance
