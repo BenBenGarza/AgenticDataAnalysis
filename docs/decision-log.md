@@ -30,41 +30,28 @@
 
 ## Where I got stuck, and what I did
 
-- **Setup and credentials**: Thinking of the best way to add credentials to my tool. I paused for a 
-- second because I was trying to think of the best way to do this with the final implementation that
-- I wanted, not what I currently had (just a python script, no docker). I also had some issues with
-- homebrew, error handling when credentials were missing. Decided to move in parts, first get my 
-- python script working with the main stuff, including credentials in the best way like using gcloud 
-- to login via browser, and then when I was ready to add this to a docker file for easy installment 
-- adapt the solution to that.
-- **Dataset traps.** I had some issues with the data at first for understanding what type of info I 
-- had. My first query showed 0% cart-to-purchase because the `item_category` differs between view 
-- and purchase events. I profiled the data and tried to understand better the information that I had
-- to correctly map it. Documented some notes (`docs/dataset_notes.md`) and added example queries for 
-- validation
-- **Persistence**: This make me think of what I currently had and what needed to change for this to 
-- work, at first it seems that it was going to be more complicated. After a careful consideration
-- I realize that because of the nature of the context we just need to store the responses we get and
-- that works for history and persistence. There was an issue with the model I'm using (Opus 5.5) that 
-- it ties thinking (response blocks) to the exact prompt and tools. That means that if something changes
-- we can't use those all blocks anymore because they won't match with the current ones. This was
-- solved by adding an option to ignore the blocks that failed and just re-process this if needed.
-- Ex. After adding a new tool or making a change in a prompt, if you ask a new question in an existing
-- chat it will cause it to failed because the blocks for the previous responses (which we have stored
-- in the db) don't match with the new ones (because of the changes).
-- **Stand Alone**: My first iteration for this was a simple cli with the agent that worked but the
-- displaying of information wasn't the best. I was stuck with this for a little way just thinking of
-- the best approach. The issue that I had here is thinking what I need for what I currently had and
-- trying to compare that to what I could need in the future. My app is simple enough to be run manually
-- in a computer but thinking someone doing everything I did leaves room for mistakes. This could have
-- been a python with django solution but implementation right now is so simple so decided it wasn't 
-- worth the overhead right now. Another thing here was dividing the front from the backend (microservices)
-- so that docker can have 2 containers, and we can manage more traffic by growing horizontally but
-- again, maybe complicating this at this point. Credentials was another issue here. 
-- At the end I tried to do a simple solution (docker) that is a little overkill for what I currently 
-- have but it does simplify the installation and gives me the structure I need to think about the future.
-- It's a monolith application but having backend api makes it easier to divide this into different
-- services.
+- **Setup and credentials**: Thinking of the best way to add credentials to my tool. I paused for a
+  second because I was trying to think of the best way to do this with the final implementation that
+  I wanted, not what I currently had (just a python script, no docker). I also had some issues with
+  homebrew, error handling when credentials were missing. Decided to move in parts, first get my
+  python script working with the main stuff, including credentials in the best way like using gcloud
+  to login via browser, and then when I was ready to add this to a docker file for easy installation
+  adapt the solution to that.
+- **Dataset traps.** I had some issues with the data at first for understanding what type of info I
+  had. My first query showed 0% cart-to-purchase because the `item_category` differs between view
+  and purchase events. I profiled the data and tried to understand better the information that I had
+  to correctly map it. Documented some notes (`docs/dataset_notes.md`) and added example queries for
+  validation.
+- **Persistence**: Solving this for my current solution while preparing for the future is what got me
+  stuck. This persistence also depends on the responses of the model so there are some scenarios
+  there that could affect how we store the information (response block - changed prompts/tools).
+  Decided to focus on solution for what I currently have, assume only one user (but prepare for more)
+  and use this feature to add more value, like the ability to have all the conversation there for
+  modification and history.
+- **Stand Alone**: Thinking about the tradeoffs and trying not to do an overly complicated solution
+  for what I actually need. Creating a script or adding docker to simplify the installation and create
+  this stand alone. I decided to go with docker which might be overkill for what I currently have
+  but it gives an idea on how to grow this easily (horizontally) for future enhancements.
 
 
 ## With another 40 hours
@@ -78,5 +65,5 @@
    links from each number in an answer to the query behind it.
 5. **UI and quality**: export, regenerate, conversation search, Playwright end-to-end tests,
    and an accessibility pass.
-6. **User management**: The ability to service multiple users and manage logins
+6. **User management**: The ability to serve multiple users and manage logins
 7. **Clear division of front and back**: For scalability (horizontal)

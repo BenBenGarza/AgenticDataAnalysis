@@ -10,6 +10,7 @@ import sys
 from app.bigquery import QueryResult
 from app.bootstrap import build_session
 from app.config import ConfigError, load_settings
+from app.display import ChartBlock, QueryBlock, TextBlock
 from app.events import (
     Event,
     ProgressDelta,
@@ -20,7 +21,7 @@ from app.events import (
     TurnFinished,
     Usage,
 )
-from app.session import ChartBlock, ChatSession, QueryBlock, TextBlock
+from app.session import ChatSession
 from app.storage import ConversationNotFound
 from app.tools import run_sql
 from app.tools.create_chart import Chart

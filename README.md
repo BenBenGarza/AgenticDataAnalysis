@@ -3,8 +3,8 @@
 A conversational data analysis app over the
 [GA4 web ecommerce demo dataset](https://developers.google.com/analytics/bigquery/web-ecommerce-demo-dataset).
 Users ask questions in a chat; an agent queries BigQuery and answers with charts and a written narrative.
-
-> Work in progress. Working: the agent, charts, persistence, the web API and the chat UI.
+Follow-up questions keep their context, and conversations are saved so they can be reopened and
+continued. Design decisions and trade-offs are in [docs/decision-log.md](docs/decision-log.md).
 
 ## Quick start
 
@@ -171,6 +171,7 @@ app/
   bigquery.py             Read-only query execution with dry-run and cost guardrails
   prompts.py              System prompt assembled from docs/
   session.py              Active conversation: connects the agent to storage
+  display.py              The user-facing view of a conversation, rebuilt from its history
   storage.py              SQLite conversation history (users, conversations, messages)
   bootstrap.py            Composition root: builds clients once and wires everything
   api.py                  HTTP endpoints; streams agent events as Server-Sent Events
@@ -192,7 +193,6 @@ docs/
   example_queries.sql     Validated SQL for common analyses (funnel, channels, products, cohorts, ...)
 tests/                    Agent loop, tools, storage, sessions and API, with fakes (no external calls)
 scripts/                  (need requirements-dev.txt)
-  check_bigquery.py       Connection smoke test
   encode_google_credentials.py  Turns a Google credentials JSON file into the .env line
   validate_examples.py    Runs the example queries; --dry-run checks syntax and cost for free
 Dockerfile                Production image: Python 3.12 slim, non-root user, health check
