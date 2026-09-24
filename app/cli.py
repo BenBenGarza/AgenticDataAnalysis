@@ -20,8 +20,10 @@ from app.events import (
     TurnFinished,
     Usage,
 )
-from app.session import ChatSession
+from app.session import ChartBlock, ChatSession, QueryBlock, TextBlock
 from app.storage import ConversationNotFound
+from app.tools import run_sql
+from app.tools.create_chart import Chart
 
 DIM, RED, RESET = "\033[2m", "\033[31m", "\033[0m"
 
@@ -104,10 +106,15 @@ def _show_conversation(session: ChatSession, last_turns: int | None = None) -> N
         f"{', showing the last' if len(shown) < len(turns) else ''}). /new to start fresh.{RESET}"
     )
     for turn in shown:
-        print(f"\nYou> {turn.question}")
-        for query in turn.queries:
-            print(f"{DIM}  ▸ query: {query['purpose']}{RESET}")
-        print(f"\nAgent> {turn.answer}")
+        print(f"\nYou> {turn.question}\n\nAgent> ", end="")
+        for block in turn.blocks:
+            match block:
+                case TextBlock(text=text):
+                    print(text)
+                case QueryBlock(purpose=purpose):
+                    print(f"{DIM}  ▸ query: {purpose}{RESET}")
+                case ChartBlock(chart=chart):
+                    print(f"{DIM}  ▸ chart: {chart.title}{RESET}")
 
 
 def _render(event: Event, show_sql: bool) -> None:
@@ -116,10 +123,15 @@ def _render(event: Event, show_sql: bool) -> None:
             print(text, end="", flush=True)
         case ProgressDelta(text=text):
             print(f"{DIM}{text}{RESET}", end="", flush=True)
-        case ToolStarted(input=tool_input):
+        case ToolStarted(name=run_sql.NAME, input=tool_input):
             print(f"\n{DIM}  ▸ query: {tool_input.get('purpose', '')}{RESET}", flush=True)
             if show_sql:
                 print(f"{DIM}{_indent(tool_input.get('query', ''), '      ')}{RESET}")
+        case ToolFinished(output=Chart() as chart):
+            # The terminal can't draw charts; the web UI does.
+            print(
+                f"\n{DIM}  ▸ chart: {chart.title} ({chart.type}, {len(chart.labels)} points){RESET}"
+            )
         case ToolFinished(output=QueryResult() as result):
             note = f", showing {len(result.rows)}" if result.truncated else ""
             print(

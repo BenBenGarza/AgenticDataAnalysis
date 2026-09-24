@@ -36,6 +36,7 @@ async function ask(question) {
         case "progress": turn.appendProgress(data.text); break;
         case "query_started": turn.queryStarted(data); break;
         case "query_finished": turn.queryFinished(data); break;
+        case "chart": turn.addChart(data.chart); break;
         case "done":
           finished = true;
           turn.finish();

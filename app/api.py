@@ -29,7 +29,7 @@ from app.events import (
 )
 from app.session import ChatSession, SessionBusy
 from app.storage import Conversation, ConversationNotFound
-from app.tools import run_sql
+from app.tools import create_chart, run_sql
 
 MAX_QUESTION_CHARS = 4_000
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -96,12 +96,14 @@ async def _stream(events: Generator[Event, None, None], session: ChatSession) ->
     """
     try:
         while (event := await run_in_threadpool(next, events, None)) is not None:
-            yield _to_sse(event, session)
+            if (message := _to_sse(event, session)) is not None:
+                yield message
     finally:
         events.close()
 
 
-def _to_sse(event: Event, session: ChatSession) -> str:
+def _to_sse(event: Event, session: ChatSession) -> str | None:
+    """Format an event for the browser, or None for events the UI doesn't show."""
     match event:
         case TextDelta(text=text):
             return _sse("text", {"text": text})
@@ -119,17 +121,12 @@ def _to_sse(event: Event, session: ChatSession) -> str:
         case ToolFinished(tool_use_id=id_, name=run_sql.NAME, error=str() as error):
             return _sse("query_finished", {"id": id_, "error": error})
         case ToolFinished(tool_use_id=id_, name=run_sql.NAME, output=QueryResult() as result):
-            return _sse(
-                "query_finished",
-                {
-                    "id": id_,
-                    "columns": result.columns,
-                    "rows": result.rows,
-                    "total_rows": result.total_rows,
-                    "truncated": result.truncated,
-                    "mb_scanned": result.mb_scanned,
-                },
-            )
+            return _sse("query_finished", {"id": id_, **run_sql.result_json(result, id_)})
+        case ToolFinished(tool_use_id=id_, output=create_chart.Chart() as chart):
+            return _sse("chart", {"id": id_, "chart": asdict(chart)})
+        case ToolStarted() | ToolFinished():
+            # Starting a chart, or a chart request the model got wrong and will retry.
+            return None
         case TurnFinished(usage=usage) if session.conversation is not None:
             # ChatSession saved the turn before passing this on, so the conversation exists.
             return _sse(

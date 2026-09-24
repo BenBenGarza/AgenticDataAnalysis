@@ -1,7 +1,17 @@
+import json
+
 import pytest
 
 from app.events import ToolStarted, TurnFailed, TurnFinished
-from app.session import BUSY_MESSAGE, ChatSession, DisplayTurn, SessionBusy, to_display_turns
+from app.session import (
+    BUSY_MESSAGE,
+    ChartBlock,
+    ChatSession,
+    DisplayTurn,
+    SessionBusy,
+    TextBlock,
+    to_display_turns,
+)
 from app.storage import ConversationStore
 from tests.fakes import FAILING_QUESTION, FakeAgent
 
@@ -142,7 +152,16 @@ def test_session_is_free_again_after_a_turn_ends_or_is_abandoned(store, question
     session.new_chat()
 
 
-def test_display_turns_rebuilds_questions_queries_and_answers():
+def test_display_turns_rebuild_text_queries_and_charts_in_order():
+    rows = [{"day": "2020-12-01", "revenue": 10.0}, {"day": "2020-12-02", "revenue": 12.5}]
+    result = json.dumps({"result_id": "t1", "columns": ["day", "revenue"], "rows": rows})
+    chart_input = {
+        "query_id": "t1",
+        "type": "line",
+        "title": "Revenue",
+        "x": "day",
+        "y": ["revenue"],
+    }
     messages = [
         {"role": "user", "content": "Q1"},
         {
@@ -155,11 +174,37 @@ def test_display_turns_rebuilds_questions_queries_and_answers():
                     "name": "run_sql",
                     "input": {"query": "SELECT 1", "purpose": "p1"},
                 },
+                {
+                    "type": "tool_use",
+                    "id": "t2",
+                    "name": "run_sql",
+                    "input": {"query": "SELECT bad", "purpose": "p2"},
+                },
             ],
         },
         {
             "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "{}"}],
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": result},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "t2",
+                    "content": "Invalid SQL",
+                    "is_error": True,
+                },
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "t3", "name": "create_chart", "input": chart_input},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t3", "content": "Chart shown"},
+            ],
         },
         {
             "role": "assistant",
@@ -172,9 +217,56 @@ def test_display_turns_rebuilds_questions_queries_and_answers():
         {"role": "assistant", "content": [{"type": "text", "text": "Direct answer."}]},
     ]
 
-    assert to_display_turns(messages) == [
-        DisplayTurn(
-            "Q1", "Let me check.\n\nFinal answer.", [{"purpose": "p1", "query": "SELECT 1"}]
-        ),
-        DisplayTurn("Q2", "Direct answer.", []),
+    first, second = to_display_turns(messages)
+
+    assert first.question == "Q1"
+    text, query, failed_query, chart, answer = first.blocks
+    assert text == TextBlock("Let me check.")
+    assert (query.purpose, query.sql, query.result["rows"], query.error) == (
+        "p1",
+        "SELECT 1",
+        rows,
+        None,
+    )
+    assert (failed_query.result, failed_query.error) == (None, "Invalid SQL")
+    assert isinstance(chart, ChartBlock)
+    assert chart.chart.labels == ["2020-12-01", "2020-12-02"]
+    assert chart.chart.series[0].values == [10.0, 12.5]
+    assert answer == TextBlock("Final answer.")
+    assert second == DisplayTurn("Q2", [TextBlock("Direct answer.")])
+
+
+def test_display_skips_charts_that_failed():
+    messages = [
+        {"role": "user", "content": "Q"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "c1",
+                    "name": "create_chart",
+                    "input": {
+                        "query_id": "missing",
+                        "type": "bar",
+                        "title": "t",
+                        "x": "a",
+                        "y": ["b"],
+                    },
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "c1",
+                    "content": "No result",
+                    "is_error": True,
+                },
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "Answer."}]},
     ]
+    assert to_display_turns(messages)[0].blocks == [TextBlock("Answer.")]

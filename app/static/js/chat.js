@@ -1,6 +1,7 @@
 // The message area: past turns, the turn being streamed, and the empty-state suggestions.
 // Model and data text is only inserted via textContent or the escaping Markdown renderer.
 
+import { createChartFigure } from "./charts.js";
 import { element } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
 
@@ -28,8 +29,11 @@ export class ChatView {
     }
     for (const turn of turns) {
       const view = this.startTurn(turn.question);
-      for (const query of turn.queries) view.addSavedQuery(query);
-      view.appendText(turn.answer);
+      for (const block of turn.blocks) {
+        if (block.type === "text") view.appendText(block.text);
+        else if (block.type === "query") view.addSavedQuery(block);
+        else if (block.type === "chart") view.addChart(block.chart);
+      }
       view.finish();
     }
     this._scrollToBottom(true);
@@ -98,9 +102,15 @@ class TurnView {
     this._scroll();
   }
 
-  /** A query from a reloaded conversation: purpose and SQL are stored, result rows are not. */
-  addSavedQuery({ purpose, query }) {
-    this._appendBlock(new QueryCard(purpose, query, "").element);
+  /** A query from a reopened conversation, with its stored result (or error). */
+  addSavedQuery({ id, purpose, sql, result, error }) {
+    const card = new QueryCard(purpose, sql, "");
+    card.finish(error ? { id, error } : { id, ...result });
+    this._appendBlock(card.element);
+  }
+
+  addChart(chart) {
+    this._appendBlock(createChartFigure(chart));
   }
 
   finish() {

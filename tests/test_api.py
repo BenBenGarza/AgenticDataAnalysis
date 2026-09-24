@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app.api import MAX_QUESTION_CHARS, create_app
 from app.session import ChatSession
 from app.storage import ConversationStore
-from tests.fakes import FAILING_QUESTION, FakeAgent
+from tests.fakes import CHART_QUESTION, FAILING_QUESTION, FakeAgent
 
 
 @pytest.fixture
@@ -46,31 +46,62 @@ def test_chat_streams_events_in_order_and_saves_the_conversation(client):
 
     assert [name for name, _ in events] == ["query_started", "query_finished", "text", "done"]
     started, finished, text, done = (data for _, data in events)
+    rows = [{"day": "d1", "revenue": 1.0}, {"day": "d2", "revenue": 2.0}]
     assert started == {
         "id": started["id"],
         "purpose": "check Revenue by channel?",
-        "sql": "SELECT 1 AS x",
+        "sql": "SELECT day, revenue",
     }
     assert finished == {
         "id": started["id"],
-        "columns": ["x"],
-        "rows": [{"x": 1}],
-        "total_rows": 1,
+        "result_id": started["id"],
+        "columns": ["day", "revenue"],
+        "rows": rows,
+        "rows_returned": 2,
+        "total_rows": 2,
         "truncated": False,
         "mb_scanned": 1.0,
     }
     assert text == {"text": "answer to Revenue by channel?"}
     assert done["conversation"]["title"] == "Revenue by channel?"
 
+    # Reopening shows the same query (with its rows) and answer, rebuilt from the history.
     session = client.get("/api/session").json()
     assert session["conversation"]["id"] == done["conversation"]["id"]
-    assert session["turns"] == [
-        {
-            "question": "Revenue by channel?",
-            "answer": "answer to Revenue by channel?",
-            "queries": [{"purpose": "check Revenue by channel?", "query": "SELECT 1 AS x"}],
-        }
+    (turn,) = session["turns"]
+    query, answer = turn["blocks"]
+    assert (query["type"], query["sql"], query["result"]["rows"]) == (
+        "query",
+        "SELECT day, revenue",
+        rows,
+    )
+    assert answer == {"type": "text", "text": "answer to Revenue by channel?"}
+
+
+def test_chart_is_streamed_with_its_data_and_rebuilt_when_reopened(client):
+    events = _chat(client, CHART_QUESTION)
+
+    assert [name for name, _ in events] == [
+        "query_started",
+        "query_finished",
+        "chart",
+        "text",
+        "done",
     ]
+    chart_event = events[2][1]
+    expected_chart = {
+        "type": "bar",
+        "title": "Revenue",
+        "labels": ["d1", "d2"],
+        "series": [{"name": "revenue", "values": [1.0, 2.0]}],
+        "value_format": "number",
+        "y_label": None,
+    }
+    assert chart_event["chart"] == expected_chart
+
+    (turn,) = client.get("/api/session").json()["turns"]
+    assert [block["type"] for block in turn["blocks"]] == ["query", "chart", "text"]
+    assert turn["blocks"][1] == {"type": "chart", "id": chart_event["id"], "chart": expected_chart}
 
 
 def test_failed_turn_streams_an_error_and_saves_nothing(client):

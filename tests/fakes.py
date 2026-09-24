@@ -1,6 +1,7 @@
 """Test doubles: no Claude or BigQuery calls anywhere in the test suite."""
 
 import copy
+import json
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
@@ -18,17 +19,19 @@ from app.events import (
     TurnFinished,
     Usage,
 )
-from app.tools.base import ToolError, ToolOutcome
+from app.tools import create_chart, run_sql
+from app.tools.base import ToolContext, ToolError, ToolOutcome
 
 # ---- A stand-in for the whole Agent (used by session and API tests) ----------------------
 
 FAILING_QUESTION = "fail"
+CHART_QUESTION = "chart it"
 
 
 class FakeAgent:
     """Answers every question with one query and a text answer, shaped like a real turn.
 
-    The question FAILING_QUESTION produces a failed turn instead.
+    FAILING_QUESTION produces a failed turn instead; CHART_QUESTION also charts the result.
     """
 
     def __init__(self, messages: list[Message]):
@@ -39,31 +42,46 @@ class FakeAgent:
             yield TurnFailed("boom")
             return
         n = len(self.messages)
-        tool_id = f"toolu_{n}"
-        tool_input = {"query": "SELECT 1 AS x", "purpose": f"check {question}"}
-        new = [
+        query_id, chart_id = f"toolu_{n}", f"toolu_{n}_chart"
+        query_input = {"query": "SELECT day, revenue", "purpose": f"check {question}"}
+        result = QueryResult(
+            ["day", "revenue"],
+            [{"day": "d1", "revenue": 1.0}, {"day": "d2", "revenue": 2.0}],
+            total_rows=2,
+            bytes_processed=1024**2,
+        )
+        stored_result = json.dumps(run_sql.result_json(result, query_id))
+        new: list[Message] = [
             {"role": "user", "content": question},
             {
                 "role": "assistant",
                 "content": [
                     {"type": "thinking", "thinking": "", "signature": f"sig{n}"},
-                    tool_use(tool_id, "run_sql", tool_input),
+                    tool_use(query_id, "run_sql", query_input),
                 ],
             },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_id,
-                        "content": '{"rows": [{"x": 1}]}',
-                    },
-                ],
-            },
-            {"role": "assistant", "content": [text(f"answer to {question}")]},
+            {"role": "user", "content": [tool_result(query_id, stored_result)]},
         ]
-        yield ToolStarted(tool_id, "run_sql", tool_input)
-        yield ToolFinished(tool_id, "run_sql", output=QueryResult(["x"], [{"x": 1}], 1, 1024**2))
+        yield ToolStarted(query_id, "run_sql", query_input)
+        yield ToolFinished(query_id, "run_sql", output=result)
+
+        if question == CHART_QUESTION:
+            chart_input = {
+                "query_id": query_id,
+                "type": "bar",
+                "title": "Revenue",
+                "x": "day",
+                "y": ["revenue"],
+            }
+            chart = create_chart.build_chart(chart_input, {query_id: stored_result})
+            new += [
+                {"role": "assistant", "content": [tool_use(chart_id, "create_chart", chart_input)]},
+                {"role": "user", "content": [tool_result(chart_id, "Chart shown")]},
+            ]
+            yield ToolStarted(chart_id, "create_chart", chart_input)
+            yield ToolFinished(chart_id, "create_chart", output=chart)
+
+        new.append({"role": "assistant", "content": [text(f"answer to {question}")]})
         yield TextDelta(f"answer to {question}")
         self.messages.extend(new)
         yield TurnFinished(Usage(), new)
@@ -78,6 +96,10 @@ def text(value: str) -> dict[str, Any]:
 
 def tool_use(tool_use_id: str, name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
     return {"type": "tool_use", "id": tool_use_id, "name": name, "input": tool_input}
+
+
+def tool_result(tool_use_id: str, content: str) -> dict[str, Any]:
+    return {"type": "tool_result", "tool_use_id": tool_use_id, "content": content}
 
 
 def reply(*blocks: dict[str, Any], stop_reason: str | None = None) -> BetaMessage:
@@ -153,9 +175,11 @@ class FakeTool:
         }
         self._errors = errors or {}
         self.calls: list[dict[str, Any]] = []
+        self.contexts: list[ToolContext] = []
 
-    def run(self, tool_input: dict[str, Any]) -> ToolOutcome:
+    def run(self, tool_input: dict[str, Any], context: ToolContext) -> ToolOutcome:
         self.calls.append(tool_input)
+        self.contexts.append(context)
         key = tool_input.get("key", "")
         if key in self._errors:
             raise ToolError(self._errors[key])

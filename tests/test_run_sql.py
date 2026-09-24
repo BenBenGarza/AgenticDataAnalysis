@@ -8,10 +8,11 @@ import pytest
 from google.api_core import exceptions as gcp_exceptions
 
 from app.bigquery import BigQueryRunner, QueryRejected
-from app.tools.base import ToolError
+from app.tools.base import ToolContext, ToolError
 from app.tools.run_sql import RunSqlTool
 
 GB = 1024**3
+CONTEXT = ToolContext(tool_use_id="toolu_1", results={})
 
 
 class FakeBigQueryClient:
@@ -115,10 +116,11 @@ def test_results_are_truncated_and_converted_to_json_values():
 
 def test_tool_returns_json_for_the_model_and_the_result_for_the_ui():
     outcome = RunSqlTool(_runner(FakeBigQueryClient(rows=[{"n": 1}]))).run(
-        {"query": "SELECT 1 AS n", "purpose": "check"}
+        {"query": "SELECT 1 AS n", "purpose": "check"}, CONTEXT
     )
 
     assert json.loads(outcome.content) == {
+        "result_id": "toolu_1",
         "columns": ["n"],
         "rows": [{"n": 1}],
         "rows_returned": 1,
@@ -132,10 +134,10 @@ def test_tool_returns_json_for_the_model_and_the_result_for_the_ui():
 def test_tool_turns_rejections_into_tool_errors():
     tool = RunSqlTool(_runner(FakeBigQueryClient(statement_type="DELETE")))
     with pytest.raises(ToolError, match="Only SELECT"):
-        tool.run({"query": "DELETE FROM t", "purpose": "x"})
+        tool.run({"query": "DELETE FROM t", "purpose": "x"}, CONTEXT)
 
 
 @pytest.mark.parametrize("tool_input", [{}, {"query": ""}, {"query": 42}])
 def test_tool_rejects_missing_or_invalid_query(tool_input):
     with pytest.raises(ToolError, match="non-empty SQL string"):
-        RunSqlTool(_runner(FakeBigQueryClient())).run(tool_input)
+        RunSqlTool(_runner(FakeBigQueryClient())).run(tool_input, CONTEXT)

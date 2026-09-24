@@ -19,7 +19,12 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
 import anthropic
-from anthropic.types.beta import BetaMessage, BetaMessageParam, BetaTextBlockParam
+from anthropic.types.beta import (
+    BetaMessage,
+    BetaMessageParam,
+    BetaTextBlockParam,
+    BetaThinkingConfigAdaptiveParam,
+)
 
 from app.config import Settings
 from app.events import (
@@ -33,7 +38,8 @@ from app.events import (
     TurnFinished,
     Usage,
 )
-from app.tools.base import Tool, ToolError
+from app.history import successful_tool_results
+from app.tools.base import Tool, ToolContext, ToolError
 
 MAX_OUTPUT_TOKENS = 64_000
 BETAS = [
@@ -42,7 +48,18 @@ BETAS = [
     # Return the notes written between tool calls ("found X, now checking Y") as progress
     # updates; otherwise they arrive as empty thinking blocks and the chat goes quiet.
     "thinking-display-updates-2026-08-18",
+    # Allows setting what happens to stored thinking blocks when the system prompt or tools
+    # changed since they were written (see THINKING below).
+    "thinking-binding-controls-2026-08-01",
 ]
+# Thinking blocks are tied to the exact system prompt and tools they were produced with. When
+# either changes (a new tool, a prompt edit), older saved conversations would be rejected;
+# "drop_block" drops their stale thinking instead, so they continue normally.
+THINKING: BetaThinkingConfigAdaptiveParam = {
+    "type": "adaptive",
+    "display": "updates",
+    "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+}
 
 
 class AgentError(Exception):
@@ -134,7 +151,7 @@ class Agent:
             # shape of BetaMessageParam, which is what the SDK expects here.
             messages=cast(list[BetaMessageParam], self.messages),
             cache_control={"type": "ephemeral"},
-            thinking={"type": "adaptive", "display": "updates"},
+            thinking=THINKING,
             output_config={"effort": self._settings.effort},
             fallbacks="default",
             betas=BETAS,
@@ -151,8 +168,9 @@ class Agent:
         for block in tool_uses:
             yield ToolStarted(block.id, block.name, block.input)
 
+        results = successful_tool_results(self.messages)
         with ThreadPoolExecutor(max_workers=len(tool_uses)) as pool:
-            outcomes = list(pool.map(self._run_tool, tool_uses))
+            outcomes = list(pool.map(lambda block: self._run_tool(block, results), tool_uses))
 
         tool_results = []
         for finished, result_block in outcomes:
@@ -160,12 +178,12 @@ class Agent:
             tool_results.append(result_block)
         return tool_results
 
-    def _run_tool(self, block: Any) -> tuple[ToolFinished, dict[str, Any]]:
+    def _run_tool(self, block: Any, results: dict[str, str]) -> tuple[ToolFinished, dict[str, Any]]:
         try:
             tool = self._tools.get(block.name)
             if tool is None:
                 raise ToolError(f"Unknown tool: {block.name}")
-            outcome = tool.run(block.input)
+            outcome = tool.run(block.input, ToolContext(block.id, results))
         except ToolError as exc:
             return (
                 ToolFinished(block.id, block.name, error=str(exc)),

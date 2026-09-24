@@ -14,6 +14,8 @@ from app.events import Message
 from app.prompts import build_system_prompt
 from app.session import ChatSession
 from app.storage import ConversationStore
+from app.tools.base import Tool
+from app.tools.create_chart import CreateChartTool
 from app.tools.run_sql import RunSqlTool
 
 
@@ -24,7 +26,7 @@ def build_session(settings: Settings) -> ChatSession:
         settings.max_bytes_billed,
         settings.max_result_rows,
     )
-    tools = [RunSqlTool(runner)]
+    tools: list[Tool] = [RunSqlTool(runner), CreateChartTool()]
     system_prompt = build_system_prompt()
 
     def new_agent(messages: list[Message]) -> Agent:

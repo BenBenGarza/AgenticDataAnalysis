@@ -4,8 +4,7 @@ A conversational data analysis app over the
 [GA4 web ecommerce demo dataset](https://developers.google.com/analytics/bigquery/web-ecommerce-demo-dataset).
 Users ask questions in a chat; an agent queries BigQuery and answers with charts and a written narrative.
 
-> Work in progress. Working: the agent, persistence, the web API and the chat UI.
-> Charts are next.
+> Work in progress. Working: the agent, charts, persistence, the web API and the chat UI.
 
 ## Setup
 
@@ -94,6 +93,17 @@ not a single `SELECT` and anything that would scan more than the byte limit; the
 `maximum_bytes_billed`, and only the first rows are returned to the model. SQL errors are returned to
 the model so it can fix its own query.
 
+Charts (`app/tools/create_chart.py`): the model never supplies data points. It names an earlier
+query's `result_id` and the columns to plot; the backend validates that against the stored result
+and builds the chart from it, so a chart can only show what BigQuery returned. The same function
+rebuilds charts from the saved history when a conversation is reopened. The UI draws them with
+Chart.js (pinned version with a subresource-integrity hash) using a colorblind-validated palette,
+and each chart's exact rows stay visible in the query card above it.
+
+Stored conversations stay usable when the prompt or tools change: thinking blocks are tied to the
+exact prompt and tools they were produced with, and the agent asks the API to drop stale ones
+(`prefix_mismatch_behavior: "drop_block"`) instead of rejecting the conversation.
+
 The system prompt (`app/prompts.py`) is built from `docs/`, so the dataset notes and example queries
 have one source of truth, and it is cached with prompt caching.
 
@@ -112,6 +122,8 @@ app/
   tools/
     base.py               Tool interface (Protocol) + ToolOutcome / ToolError
     run_sql.py            The run_sql tool: definition, input validation, result for the model
+    create_chart.py       The create_chart tool: validates a chart against a stored query result
+  history.py              Read-only helpers over the message history (tool results)
   bigquery.py             Read-only query execution with dry-run and cost guardrails
   prompts.py              System prompt assembled from docs/
   session.py              Active conversation: connects the agent to storage
@@ -125,7 +137,8 @@ app/
     index.html, styles.css
     js/main.js            App controller: state, wiring, composer
     js/api.js             Backend calls + Server-Sent Events stream parsing
-    js/chat.js            Messages, streamed answers, query cards
+    js/chat.js            Messages, streamed answers, query cards, charts
+    js/charts.js          Chart rendering (Chart.js) with the validated palette
     js/sidebar.js         Conversation list
     js/markdown.js        Safe Markdown renderer
     js/dom.js             Element helper

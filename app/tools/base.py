@@ -4,6 +4,7 @@ The agent only knows this interface: adding a tool means writing a new Tool, not
 the loop.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -20,6 +21,14 @@ class ToolOutcome:
     output: object  # structured result for the user-facing clients (e.g. a QueryResult)
 
 
+@dataclass(frozen=True)
+class ToolContext:
+    """Read-only facts about the conversation that a tool call may build on."""
+
+    tool_use_id: str  # the id of this call
+    results: Mapping[str, str]  # tool_use_id -> content of each earlier successful result
+
+
 class Tool(Protocol):
     @property
     def name(self) -> str: ...
@@ -29,6 +38,6 @@ class Tool(Protocol):
         """The tool's name, description and input schema, as sent to the Messages API."""
         ...
 
-    def run(self, tool_input: dict[str, Any]) -> ToolOutcome:
+    def run(self, tool_input: dict[str, Any], context: ToolContext) -> ToolOutcome:
         """Execute one call. Raises ToolError for failures the model can recover from."""
         ...

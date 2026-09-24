@@ -200,3 +200,27 @@ def test_effort_setting_is_sent():
     client = FakeAnthropic(reply(text("ok")))
     _run(Agent(replace(SETTINGS, effort="low"), client, [FakeTool()], SYSTEM_PROMPT))
     assert client.requests[0]["output_config"] == {"effort": "low"}
+
+
+def test_tools_receive_their_call_id_and_earlier_successful_results():
+    client = FakeAnthropic(
+        reply(tool_use("t1", "lookup", {"key": "a"}), tool_use("t2", "lookup", {"key": "bad"})),
+        reply(tool_use("t3", "lookup", {"key": "b"})),
+        reply(text("done")),
+    )
+    tool = FakeTool(errors={"bad": "failed"})
+
+    _run(_agent(client, tool))
+
+    first, _, third = tool.contexts
+    assert first.tool_use_id == "t1" and first.results == {}
+    assert third.tool_use_id == "t3"
+    assert third.results == {"t1": "result for a"}  # the failed t2 is not offered
+
+
+def test_stale_thinking_is_dropped_rather_than_rejected():
+    client = FakeAnthropic(reply(text("ok")))
+    _run(_agent(client))
+    request = client.requests[0]
+    assert request["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
+    assert "thinking-binding-controls-2026-08-01" in request["betas"]
