@@ -43,6 +43,16 @@ Terminal chat (`--show-sql` prints each query the agent runs):
 .venv/bin/python -m app.cli --show-sql
 ```
 
+Conversations are saved to `data/app.db` (SQLite, created on first run), so quitting and restarting
+continues the last conversation. In the chat: `/new`, `/list`, `/open ID`, `/delete ID`, `/help`.
+
+Tests (no API or BigQuery calls):
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
+```
+
 ## How it works
 
 `app/agent.py` implements the agent loop directly on the Anthropic Messages API (no agent framework):
@@ -58,6 +68,12 @@ the model so it can fix its own query.
 The system prompt (`app/prompts.py`) is built from `docs/`, so the dataset notes and example queries
 have one source of truth, and it is cached with prompt caching.
 
+Persistence (`app/storage.py`, `app/session.py`): each conversation's API message history is stored
+exactly as sent, append-only, one completed turn at a time, so a reloaded conversation continues
+seamlessly (and keeps hitting the prompt cache). The chat view is rebuilt from that history, so there
+is a single source of truth. Deleting is a soft delete (`deleted_at`); nothing is physically removed.
+The schema has a `users` table (one default user today) so multiple users need no schema change.
+
 ## Project layout
 
 ```
@@ -65,11 +81,14 @@ app/
   agent.py                Agent loop, tool definition, streamed events
   bigquery_tool.py        Read-only query execution with dry-run guardrails
   prompts.py              System prompt assembled from docs/
+  session.py              Active conversation: connects the agent to storage
+  storage.py              SQLite conversation history (users, conversations, messages)
   config.py               Settings from environment / .env
   cli.py                  Terminal chat
 docs/
   dataset_notes.md        What the data looks like, its pitfalls and obfuscation (basis for the system prompt)
   example_queries.sql     Validated SQL for common analyses (funnel, channels, products, cohorts, ...)
+tests/                    Unit tests for storage and sessions (no external calls)
 scripts/
   check_bigquery.py       Connection smoke test
   validate_examples.py    Runs the example queries; --dry-run checks syntax and cost for free

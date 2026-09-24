@@ -3,7 +3,8 @@
 __pycache__/
 *.pyc
 
-# Local configuration and secrets
+# Local data, configuration and secrets
+data/
 .env
 *credentials*.json
 *service-account*.json

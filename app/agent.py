@@ -109,6 +109,8 @@ class Usage:
 @dataclass
 class TurnFinished:
     usage: Usage
+    # The messages this turn appended to the history (user question through final answer).
+    new_messages: list[dict[str, Any]]
 
 
 @dataclass
@@ -127,8 +129,8 @@ class AgentError(Exception):
 # ---- Agent -------------------------------------------------------------------------------
 
 class Agent:
-    def __init__(self, settings: Settings, client: anthropic.Anthropic | None = None,
-                 sql: BigQueryRunner | None = None):
+    def __init__(self, settings: Settings, messages: list[dict[str, Any]] | None = None,
+                 client: anthropic.Anthropic | None = None, sql: BigQueryRunner | None = None):
         self._settings = settings
         self._client = client or anthropic.Anthropic()
         self._sql = sql or BigQueryRunner(
@@ -138,7 +140,9 @@ class Agent:
         # in _stream_response additionally caches the growing conversation.
         self._system = [{"type": "text", "text": build_system_prompt(),
                          "cache_control": {"type": "ephemeral"}}]
-        self.messages: list[dict[str, Any]] = []
+        # Plain JSON-compatible dicts, exactly as sent to the API, so the history can be saved
+        # and reloaded (e.g. from app.storage) without changing a byte.
+        self.messages: list[dict[str, Any]] = list(messages or [])
 
     def ask(self, question: str) -> Iterator[Event]:
         checkpoint = len(self.messages)
@@ -156,12 +160,18 @@ class Agent:
             # Also runs if the consumer abandons the generator (e.g. client disconnects).
             if not completed:
                 del self.messages[checkpoint:]
+        if completed:
+            # Yielded only after the turn is final, so a consumer that stops reading here
+            # can't trigger the rollback above.
+            yield TurnFinished(usage, self.messages[checkpoint:])
 
     def _run_loop(self, usage: Usage) -> Iterator[Event]:
         for _ in range(self._settings.max_agent_steps):
             response = yield from self._stream_response()
             usage.add(response.usage)
-            self.messages.append({"role": "assistant", "content": response.content})
+            self.messages.append(
+                {"role": "assistant", "content": [_to_request_json(b) for b in response.content]}
+            )
 
             if response.stop_reason == "refusal":
                 raise AgentError("Claude declined to answer this request.")
@@ -170,7 +180,6 @@ class Agent:
 
             tool_uses = [block for block in response.content if block.type == "tool_use"]
             if not tool_uses:
-                yield TurnFinished(usage)
                 return
 
             tool_results = yield from self._run_tools(tool_uses)
@@ -240,3 +249,9 @@ class Agent:
         return (ToolFinished(block.id, error=error),
                 {"type": "tool_result", "tool_use_id": block.id, "content": error, "is_error": True})
 
+
+def _to_request_json(block: Any) -> dict[str, Any]:
+    """Serialize a response content block the same way the SDK does when sending it back
+    (see anthropic._utils._json.openapi_model_dump), so stored history is identical to sent history."""
+    return block.model_dump(mode="json", by_alias=True, exclude_unset=True,
+                            exclude=getattr(block, "__api_exclude__", None))
