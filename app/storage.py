@@ -16,9 +16,10 @@ by user_id so adding users later needs no schema change.
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+
+from app.events import Message
 
 DEFAULT_USER_ID = 1
 TITLE_MAX_CHARS = 80
@@ -51,8 +52,6 @@ CREATE TABLE IF NOT EXISTS messages (
     PRIMARY KEY (conversation_id, position)
 );
 """
-
-Message = dict[str, Any]  # {"role": ..., "content": ...} as sent to the Messages API
 
 
 @dataclass(frozen=True)
@@ -93,12 +92,12 @@ class ConversationStore:
         now = _now()
         title = _make_title(title)
         with self._db:
-            cursor = self._db.execute(
+            (conversation_id,) = self._db.execute(
                 "INSERT INTO conversations (user_id, title, model, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?) RETURNING id",
                 (user_id, title, model, now, now),
-            )
-        return Conversation(cursor.lastrowid, title, model, now, now)
+            ).fetchone()
+        return Conversation(conversation_id, title, model, now, now)
 
     def get_conversation(self, user_id: int, conversation_id: int) -> Conversation:
         row = self._db.execute(
@@ -167,8 +166,10 @@ class ConversationStore:
             self._db.executemany(
                 "INSERT INTO messages (conversation_id, position, role, content_json, created_at) "
                 "VALUES (?, ?, ?, ?, ?)",
-                [(conversation_id, next_position + i, m["role"], json.dumps(m["content"]), now)
-                 for i, m in enumerate(messages)],
+                [
+                    (conversation_id, next_position + i, m["role"], json.dumps(m["content"]), now)
+                    for i, m in enumerate(messages)
+                ],
             )
             self._db.execute(
                 "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conversation_id)
@@ -183,7 +184,7 @@ class ConversationStore:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def _make_title(first_question: str) -> str:

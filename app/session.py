@@ -4,35 +4,53 @@ Connects the Agent (which only knows an in-memory message list) to the Conversat
 Both the terminal client and the web API drive the app through this class.
 """
 
-from collections.abc import Iterator
+from collections.abc import Callable, Generator
 from contextlib import closing
 from dataclasses import dataclass
-from typing import Any
+from typing import Protocol
 
-from app.agent import Agent, Event, TurnFinished
-from app.config import Settings
+from app.events import Event, Message, TurnFinished
 from app.storage import DEFAULT_USER_ID, Conversation, ConversationStore
+from app.tools import run_sql
+
+
+class ConversationAgent(Protocol):
+    """What the session needs from an agent (app.agent.Agent in production, fakes in tests)."""
+
+    messages: list[Message]
+
+    def ask(self, question: str) -> Generator[Event, None, None]: ...
+
+
+# Builds an agent that continues from the given message history.
+AgentFactory = Callable[[list[Message]], ConversationAgent]
 
 
 @dataclass
 class DisplayTurn:
     """One question and its answer, as shown to the user when a conversation is reopened."""
+
     question: str
     answer: str
     queries: list[dict[str, str]]  # {"purpose": ..., "query": ...} in the order they ran
 
 
 class ChatSession:
-    def __init__(self, settings: Settings, store: ConversationStore,
-                 user_id: int = DEFAULT_USER_ID, agent_factory=Agent):
-        self._settings = settings
+    def __init__(
+        self,
+        store: ConversationStore,
+        agent_factory: AgentFactory,
+        model: str,
+        user_id: int = DEFAULT_USER_ID,
+    ):
         self._store = store
+        self._agent_factory = agent_factory
+        self._model = model  # recorded on new conversations
         self._user_id = user_id
-        self._agent_factory = agent_factory  # replaceable in tests
-        self.conversation = store.get_active_conversation(user_id)
+        self.conversation: Conversation | None = store.get_active_conversation(user_id)
         self._agent = self._new_agent()
 
-    def ask(self, question: str) -> Iterator[Event]:
+    def ask(self, question: str) -> Generator[Event, None, None]:
         """Run one turn; the turn is saved before TurnFinished is passed on.
 
         Closing this generator early (e.g. the client disconnected) closes the agent's turn
@@ -66,21 +84,22 @@ class ChatSession:
     def display_turns(self) -> list[DisplayTurn]:
         return to_display_turns(self._agent.messages)
 
-    def _new_agent(self) -> Agent:
+    def _new_agent(self) -> ConversationAgent:
         messages = self._store.load_messages(self.conversation.id) if self.conversation else []
-        return self._agent_factory(self._settings, messages)
+        return self._agent_factory(messages)
 
-    def _save_turn(self, question: str, messages: list[dict[str, Any]]) -> None:
-        # A conversation is created by its first completed turn, so empty chats never reach history.
+    def _save_turn(self, question: str, messages: list[Message]) -> None:
+        # A conversation is created by its first completed turn, so empty chats never reach
+        # history.
         if self.conversation is None:
             self.conversation = self._store.create_conversation(
-                self._user_id, question, self._settings.model
+                self._user_id, question, self._model
             )
             self._store.set_active_conversation(self._user_id, self.conversation.id)
         self._store.append_messages(self.conversation.id, messages)
 
 
-def to_display_turns(messages: list[dict[str, Any]]) -> list[DisplayTurn]:
+def to_display_turns(messages: list[Message]) -> list[DisplayTurn]:
     """Rebuild the user-facing view from the stored API history (the single source of truth).
 
     A turn starts at a user message whose content is a plain string (the question); user
@@ -95,10 +114,14 @@ def to_display_turns(messages: list[dict[str, Any]]) -> list[DisplayTurn]:
             continue
         turn = turns[-1]
         for block in content:
-            if block["type"] == "tool_use":
-                turn.queries.append({"purpose": block["input"].get("purpose", ""),
-                                     "query": block["input"].get("query", "")})
+            if block["type"] == "tool_use" and block["name"] == run_sql.NAME:
+                turn.queries.append(
+                    {
+                        "purpose": block["input"].get("purpose", ""),
+                        "query": block["input"].get("query", ""),
+                    }
+                )
             elif block["type"] == "text":
                 # Text written before a query and the final answer are separate blocks.
-                turn.answer = f"{turn.answer}\n\n{block['text']}" if turn.answer else block["text"]
+                turn.answer = "\n\n".join(filter(None, [turn.answer, block["text"]]))
     return turns

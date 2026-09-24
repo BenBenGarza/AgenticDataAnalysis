@@ -1,14 +1,11 @@
-from dataclasses import replace
-
 import pytest
 
-from app.agent import ToolStarted
-from app.config import Settings
+from app.events import ToolStarted
 from app.session import ChatSession, DisplayTurn, to_display_turns
 from app.storage import ConversationStore
 from tests.fakes import FAILING_QUESTION, FakeAgent
 
-SETTINGS = Settings(gcp_project="test-project")
+MODEL = "claude-opus-5-5"
 
 
 @pytest.fixture
@@ -23,7 +20,7 @@ def _ask(session: ChatSession, question: str) -> list:
 
 
 def test_first_completed_turn_creates_and_activates_the_conversation(store):
-    session = ChatSession(SETTINGS, store, agent_factory=FakeAgent)
+    session = ChatSession(store, FakeAgent, MODEL)
     assert session.conversation is None
 
     _ask(session, "Revenue by channel?")
@@ -34,7 +31,7 @@ def test_first_completed_turn_creates_and_activates_the_conversation(store):
 
 
 def test_failed_turn_saves_nothing(store):
-    session = ChatSession(SETTINGS, store, agent_factory=FakeAgent)
+    session = ChatSession(store, FakeAgent, MODEL)
 
     _ask(session, FAILING_QUESTION)
 
@@ -43,11 +40,11 @@ def test_failed_turn_saves_nothing(store):
 
 
 def test_restart_continues_the_active_conversation(store):
-    first_run = ChatSession(SETTINGS, store, agent_factory=FakeAgent)
+    first_run = ChatSession(store, FakeAgent, MODEL)
     _ask(first_run, "Q1")
     _ask(first_run, "Q2")
 
-    restarted = ChatSession(SETTINGS, store, agent_factory=FakeAgent)
+    restarted = ChatSession(store, FakeAgent, MODEL)
     assert restarted.conversation.id == first_run.conversation.id
     assert [t.question for t in restarted.display_turns()] == ["Q1", "Q2"]
 
@@ -57,7 +54,7 @@ def test_restart_continues_the_active_conversation(store):
 
 
 def test_new_chat_then_open_switches_conversations(store):
-    session = ChatSession(SETTINGS, store, agent_factory=FakeAgent)
+    session = ChatSession(store, FakeAgent, MODEL)
     _ask(session, "first topic")
     first_id = session.conversation.id
 
@@ -72,7 +69,7 @@ def test_new_chat_then_open_switches_conversations(store):
 
 
 def test_deleting_the_open_conversation_starts_a_new_chat(store):
-    session = ChatSession(SETTINGS, store, agent_factory=FakeAgent)
+    session = ChatSession(store, FakeAgent, MODEL)
     _ask(session, "q")
 
     session.delete(session.conversation.id)
@@ -83,14 +80,14 @@ def test_deleting_the_open_conversation_starts_a_new_chat(store):
 
 
 def test_conversation_records_the_model(store):
-    session = ChatSession(replace(SETTINGS, model="claude-opus-5-5"), store, agent_factory=FakeAgent)
+    session = ChatSession(store, FakeAgent, "some-model")
     _ask(session, "q")
-    assert session.conversation.model == "claude-opus-5-5"
+    assert session.conversation.model == "some-model"
 
 
 def test_abandoning_a_turn_midway_saves_nothing(store):
     # e.g. the browser disconnects while the answer is streaming
-    session = ChatSession(SETTINGS, store, agent_factory=FakeAgent)
+    session = ChatSession(store, FakeAgent, MODEL)
     events = session.ask("q")
     assert isinstance(next(events), ToolStarted)  # the turn is under way
     events.close()
@@ -102,20 +99,36 @@ def test_abandoning_a_turn_midway_saves_nothing(store):
 def test_display_turns_rebuilds_questions_queries_and_answers():
     messages = [
         {"role": "user", "content": "Q1"},
-        {"role": "assistant", "content": [
-            {"type": "text", "text": "Let me check."},
-            {"type": "tool_use", "id": "t1", "name": "run_sql", "input": {"query": "SELECT 1", "purpose": "p1"}},
-        ]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "{}"}]},
-        {"role": "assistant", "content": [
-            {"type": "thinking", "thinking": "", "signature": "s"},
-            {"type": "text", "text": "Final answer."},
-        ]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me check."},
+                {
+                    "type": "tool_use",
+                    "id": "t1",
+                    "name": "run_sql",
+                    "input": {"query": "SELECT 1", "purpose": "p1"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "{}"}],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "s"},
+                {"type": "text", "text": "Final answer."},
+            ],
+        },
         {"role": "user", "content": "Q2"},
         {"role": "assistant", "content": [{"type": "text", "text": "Direct answer."}]},
     ]
 
     assert to_display_turns(messages) == [
-        DisplayTurn("Q1", "Let me check.\n\nFinal answer.", [{"purpose": "p1", "query": "SELECT 1"}]),
+        DisplayTurn(
+            "Q1", "Let me check.\n\nFinal answer.", [{"purpose": "p1", "query": "SELECT 1"}]
+        ),
         DisplayTurn("Q2", "Direct answer.", []),
     ]

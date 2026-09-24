@@ -4,7 +4,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import MAX_QUESTION_CHARS, create_app
-from app.config import Settings
 from app.session import ChatSession
 from app.storage import ConversationStore
 from tests.fakes import FAILING_QUESTION, FakeAgent
@@ -13,7 +12,7 @@ from tests.fakes import FAILING_QUESTION, FakeAgent
 @pytest.fixture
 def client(tmp_path):
     store = ConversationStore(tmp_path / "app.db")
-    session = ChatSession(Settings(gcp_project="test"), store, agent_factory=FakeAgent)
+    session = ChatSession(store, FakeAgent, "test-model")
     with TestClient(create_app(session)) as client:
         yield client
     store.close()
@@ -27,7 +26,9 @@ def _chat(client: TestClient, question: str) -> list[tuple[str, dict]]:
     events = []
     for block in response.text.strip().split("\n\n"):
         name_line, data_line = block.split("\n")
-        events.append((name_line.removeprefix("event: "), json.loads(data_line.removeprefix("data: "))))
+        events.append(
+            (name_line.removeprefix("event: "), json.loads(data_line.removeprefix("data: ")))
+        )
     return events
 
 
@@ -41,16 +42,31 @@ def test_chat_streams_events_in_order_and_saves_the_conversation(client):
 
     assert [name for name, _ in events] == ["query_started", "query_finished", "text", "done"]
     started, finished, text, done = (data for _, data in events)
-    assert started == {"id": started["id"], "purpose": "check Revenue by channel?", "sql": "SELECT 1 AS x"}
-    assert finished == {"id": started["id"], "columns": ["x"], "rows": [{"x": 1}],
-                        "total_rows": 1, "truncated": False, "mb_scanned": 1.0}
+    assert started == {
+        "id": started["id"],
+        "purpose": "check Revenue by channel?",
+        "sql": "SELECT 1 AS x",
+    }
+    assert finished == {
+        "id": started["id"],
+        "columns": ["x"],
+        "rows": [{"x": 1}],
+        "total_rows": 1,
+        "truncated": False,
+        "mb_scanned": 1.0,
+    }
     assert text == {"text": "answer to Revenue by channel?"}
     assert done["conversation"]["title"] == "Revenue by channel?"
 
     session = client.get("/api/session").json()
     assert session["conversation"]["id"] == done["conversation"]["id"]
-    assert session["turns"] == [{"question": "Revenue by channel?", "answer": "answer to Revenue by channel?",
-                                 "queries": [{"purpose": "check Revenue by channel?", "query": "SELECT 1 AS x"}]}]
+    assert session["turns"] == [
+        {
+            "question": "Revenue by channel?",
+            "answer": "answer to Revenue by channel?",
+            "queries": [{"purpose": "check Revenue by channel?", "query": "SELECT 1 AS x"}],
+        }
+    ]
 
 
 def test_failed_turn_streams_an_error_and_saves_nothing(client):
@@ -86,10 +102,13 @@ def test_delete_hides_the_conversation(client):
     assert client.get("/api/session").json()["conversation"] is None
 
 
-@pytest.mark.parametrize("method, path", [
-    ("post", "/api/conversations/999/open"),
-    ("delete", "/api/conversations/999"),
-])
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("post", "/api/conversations/999/open"),
+        ("delete", "/api/conversations/999"),
+    ],
+)
 def test_unknown_conversation_is_404(client, method, path):
     response = getattr(client, method)(path)
     assert response.status_code == 404

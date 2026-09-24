@@ -37,15 +37,32 @@ def test_messages_round_trip_unchanged_and_in_order(store):
     conversation = store.create_conversation(USER, "Which channels drove revenue?", MODEL)
     turn_1 = [
         {"role": "user", "content": "Which channels drove revenue?"},
-        {"role": "assistant", "content": [
-            {"type": "thinking", "thinking": "", "signature": "abc=="},
-            {"type": "tool_use", "id": "toolu_1", "name": "run_sql",
-             "input": {"query": "SELECT 1", "purpose": "check"}},
-        ]},
-        {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "toolu_1", "content": '{"rows": [{"x": 1}]}'},
-        ]},
-        {"role": "assistant", "content": [{"type": "text", "text": "Organic search — 15% of revenue"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "abc=="},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "run_sql",
+                    "input": {"query": "SELECT 1", "purpose": "check"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": '{"rows": [{"x": 1}]}',
+                },
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Organic search — 15% of revenue"}],
+        },
     ]
     turn_2 = [
         {"role": "user", "content": "And in November?"},
@@ -63,10 +80,13 @@ def test_failed_append_writes_nothing(store):
     store.append_messages(conversation.id, [{"role": "user", "content": "q"}])
 
     with pytest.raises(sqlite3.IntegrityError):  # 'system' violates the role CHECK
-        store.append_messages(conversation.id, [
-            {"role": "assistant", "content": "partial"},
-            {"role": "system", "content": "invalid"},
-        ])
+        store.append_messages(
+            conversation.id,
+            [
+                {"role": "assistant", "content": "partial"},
+                {"role": "system", "content": "invalid"},
+            ],
+        )
 
     assert store.load_messages(conversation.id) == [{"role": "user", "content": "q"}]
 
@@ -85,7 +105,10 @@ def test_history_is_newest_first_and_updated_by_new_messages(store, monkeypatch)
 
 
 def test_title_is_single_line_and_truncated(store):
-    assert store.create_conversation(USER, "  Revenue\n by   channel ", MODEL).title == "Revenue by channel"
+    assert (
+        store.create_conversation(USER, "  Revenue\n by   channel ", MODEL).title
+        == "Revenue by channel"
+    )
     long_title = store.create_conversation(USER, "x" * 200, MODEL).title
     assert len(long_title) == 80 and long_title.endswith("…")
 
@@ -140,9 +163,8 @@ def test_database_rejects_a_hard_delete_that_would_orphan_messages(store):
     conversation = store.create_conversation(USER, "q", MODEL)
     store.append_messages(conversation.id, [{"role": "user", "content": "q"}])
 
-    with pytest.raises(sqlite3.IntegrityError):
-        with store._db:
-            store._db.execute("DELETE FROM conversations WHERE id = ?", (conversation.id,))
+    with pytest.raises(sqlite3.IntegrityError), store._db:
+        store._db.execute("DELETE FROM conversations WHERE id = ?", (conversation.id,))
 
 
 def test_conversations_are_scoped_to_their_user(store):

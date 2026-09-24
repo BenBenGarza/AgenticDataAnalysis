@@ -3,10 +3,13 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast, get_args
 
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
 @dataclass(frozen=True)
@@ -15,7 +18,7 @@ class Settings:
     model: str = "claude-opus-5-5"
     # How much the model thinks (low | medium | high | xhigh | max). Opus 5.5 defaults to medium;
     # writing correct SQL over nested GA4 data benefits from high.
-    effort: str = "high"
+    effort: Effort = "high"
     # Hard cap per query. The heaviest example (landing pages over 3 months) scans ~1.5 GB.
     max_bytes_billed: int = 2 * 1024**3
     # Rows returned to the model per query; keeps tool results small and cheap.
@@ -33,7 +36,7 @@ def load_settings() -> Settings:
         raise RuntimeError("GOOGLE_CLOUD_PROJECT is not set (see .env.example)")
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError("ANTHROPIC_API_KEY is not set (see .env.example)")
-    return Settings(
-        gcp_project=project,
-        effort=os.environ.get("CLAUDE_EFFORT", Settings.effort),
-    )
+    effort = os.environ.get("CLAUDE_EFFORT", Settings.effort)
+    if effort not in get_args(Effort):
+        raise RuntimeError(f"CLAUDE_EFFORT must be one of {', '.join(get_args(Effort))}")
+    return Settings(gcp_project=project, effort=cast(Effort, effort))

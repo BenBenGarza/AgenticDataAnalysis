@@ -7,12 +7,21 @@ Conversations are saved, so quitting and restarting continues where you left off
 import argparse
 import sys
 
-from app.agent import (
-    ProgressDelta, TextDelta, ToolFinished, ToolStarted, TurnFailed, TurnFinished, Usage,
-)
+from app.bigquery import QueryResult
+from app.bootstrap import build_session
 from app.config import load_settings
+from app.events import (
+    Event,
+    ProgressDelta,
+    TextDelta,
+    ToolFinished,
+    ToolStarted,
+    TurnFailed,
+    TurnFinished,
+    Usage,
+)
 from app.session import ChatSession
-from app.storage import ConversationNotFound, ConversationStore
+from app.storage import ConversationNotFound
 
 DIM, RED, RESET = "\033[2m", "\033[31m", "\033[0m"
 
@@ -30,8 +39,7 @@ def main() -> None:
     parser.add_argument("--show-sql", action="store_true", help="print each query the agent runs")
     args = parser.parse_args()
 
-    settings = load_settings()
-    session = ChatSession(settings, ConversationStore(settings.database_path))
+    session = build_session(load_settings())
     print("Ask a question about the Google Merchandise Store data (/help for commands).")
     if session.conversation:
         _show_conversation(session, last_turns=1)
@@ -87,10 +95,14 @@ def _list_conversations(session: ChatSession) -> None:
 
 
 def _show_conversation(session: ChatSession, last_turns: int | None = None) -> None:
+    if session.conversation is None:
+        return
     turns = session.display_turns()
     shown = turns[-last_turns:] if last_turns else turns
-    print(f"{DIM}Continuing \"{session.conversation.title}\" ({len(turns)} earlier questions"
-          f"{', showing the last' if len(shown) < len(turns) else ''}). /new to start fresh.{RESET}")
+    print(
+        f'{DIM}Continuing "{session.conversation.title}" ({len(turns)} earlier questions'
+        f"{', showing the last' if len(shown) < len(turns) else ''}). /new to start fresh.{RESET}"
+    )
     for turn in shown:
         print(f"\nYou> {turn.question}")
         for query in turn.queries:
@@ -98,20 +110,22 @@ def _show_conversation(session: ChatSession, last_turns: int | None = None) -> N
         print(f"\nAgent> {turn.answer}")
 
 
-def _render(event, show_sql: bool) -> None:
+def _render(event: Event, show_sql: bool) -> None:
     match event:
         case TextDelta(text=text):
             print(text, end="", flush=True)
         case ProgressDelta(text=text):
             print(f"{DIM}{text}{RESET}", end="", flush=True)
-        case ToolStarted(purpose=purpose, query=query):
-            print(f"\n{DIM}  ▸ query: {purpose}{RESET}", flush=True)
+        case ToolStarted(input=tool_input):
+            print(f"\n{DIM}  ▸ query: {tool_input.get('purpose', '')}{RESET}", flush=True)
             if show_sql:
-                print(f"{DIM}{_indent(query, '      ')}{RESET}")
-        case ToolFinished(result=result, error=None):
+                print(f"{DIM}{_indent(tool_input.get('query', ''), '      ')}{RESET}")
+        case ToolFinished(output=QueryResult() as result):
             note = f", showing {len(result.rows)}" if result.truncated else ""
-            print(f"{DIM}    ✓ {result.total_rows} rows{note}, "
-                  f"{result.bytes_processed / 1024**2:.0f} MB scanned{RESET}")
+            print(
+                f"{DIM}    ✓ {result.total_rows} rows{note}, "
+                f"{result.mb_scanned:.0f} MB scanned{RESET}"
+            )
         case ToolFinished(error=error):
             print(f"{DIM}    ✗ {error}{RESET}")
         case TurnFinished(usage=usage):
@@ -122,9 +136,11 @@ def _render(event, show_sql: bool) -> None:
 
 
 def _usage_line(usage: Usage) -> str:
-    return (f"{usage.model_calls} model calls · input {usage.input_tokens:,} "
-            f"+ cache read {usage.cache_read_tokens:,} / write {usage.cache_write_tokens:,} "
-            f"· output {usage.output_tokens:,} tokens")
+    return (
+        f"{usage.model_calls} model calls · input {usage.input_tokens:,} "
+        f"+ cache read {usage.cache_read_tokens:,} / write {usage.cache_write_tokens:,} "
+        f"· output {usage.output_tokens:,} tokens"
+    )
 
 
 def _indent(text: str, prefix: str) -> str:

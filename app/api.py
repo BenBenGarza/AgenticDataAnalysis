@@ -6,7 +6,7 @@ time (see README), so one ChatSession serves every request.
 """
 
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Generator
 from dataclasses import asdict
 from typing import Annotated, Any
 
@@ -15,18 +15,27 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, StringConstraints
 from starlette.concurrency import run_in_threadpool
 
-from app.agent import (
-    Event, ProgressDelta, TextDelta, ToolFinished, ToolStarted, TurnFailed, TurnFinished,
+from app.bigquery import QueryResult
+from app.events import (
+    Event,
+    ProgressDelta,
+    TextDelta,
+    ToolFinished,
+    ToolStarted,
+    TurnFailed,
+    TurnFinished,
 )
 from app.session import ChatSession
 from app.storage import Conversation, ConversationNotFound
+from app.tools import run_sql
 
 MAX_QUESTION_CHARS = 4_000
 
 
 class ChatRequest(BaseModel):
-    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1,
-                                               max_length=MAX_QUESTION_CHARS)]
+    question: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUESTION_CHARS)
+    ]
 
 
 def create_app(session: ChatSession) -> FastAPI:
@@ -70,7 +79,7 @@ def create_app(session: ChatSession) -> FastAPI:
     return app
 
 
-async def _stream(events: Iterator[Event], session: ChatSession) -> AsyncIterator[str]:
+async def _stream(events: Generator[Event, None, None], session: ChatSession) -> AsyncIterator[str]:
     """Pull events in a worker thread (the agent is blocking code) and format them as SSE.
 
     Starlette's own iterate_in_threadpool never closes the iterator, so we close it
@@ -89,23 +98,35 @@ def _to_sse(event: Event, session: ChatSession) -> str:
             return _sse("text", {"text": text})
         case ProgressDelta(text=text):
             return _sse("progress", {"text": text})
-        case ToolStarted(tool_use_id=id_, purpose=purpose, query=query):
-            return _sse("query_started", {"id": id_, "purpose": purpose, "sql": query})
-        case ToolFinished(tool_use_id=id_, error=str() as error):
+        case ToolStarted(tool_use_id=id_, name=run_sql.NAME, input=tool_input):
+            return _sse(
+                "query_started",
+                {
+                    "id": id_,
+                    "purpose": tool_input.get("purpose", ""),
+                    "sql": tool_input.get("query", ""),
+                },
+            )
+        case ToolFinished(tool_use_id=id_, name=run_sql.NAME, error=str() as error):
             return _sse("query_finished", {"id": id_, "error": error})
-        case ToolFinished(tool_use_id=id_, result=result):
-            return _sse("query_finished", {
-                "id": id_,
-                "columns": result.columns,
-                "rows": result.rows,
-                "total_rows": result.total_rows,
-                "truncated": result.truncated,
-                "mb_scanned": round(result.bytes_processed / 1024**2, 1),
-            })
-        case TurnFinished(usage=usage):
+        case ToolFinished(tool_use_id=id_, name=run_sql.NAME, output=QueryResult() as result):
+            return _sse(
+                "query_finished",
+                {
+                    "id": id_,
+                    "columns": result.columns,
+                    "rows": result.rows,
+                    "total_rows": result.total_rows,
+                    "truncated": result.truncated,
+                    "mb_scanned": result.mb_scanned,
+                },
+            )
+        case TurnFinished(usage=usage) if session.conversation is not None:
             # ChatSession saved the turn before passing this on, so the conversation exists.
-            return _sse("done", {"conversation": _conversation_json(session.conversation),
-                                 "usage": asdict(usage)})
+            return _sse(
+                "done",
+                {"conversation": _conversation_json(session.conversation), "usage": asdict(usage)},
+            )
         case TurnFailed(message=message):
             return _sse("error", {"message": message})
     raise TypeError(f"Unhandled event: {event!r}")
@@ -124,5 +145,9 @@ def _session_view(session: ChatSession) -> dict[str, Any]:
 
 
 def _conversation_json(conversation: Conversation) -> dict[str, Any]:
-    return {"id": conversation.id, "title": conversation.title,
-            "created_at": conversation.created_at, "updated_at": conversation.updated_at}
+    return {
+        "id": conversation.id,
+        "title": conversation.title,
+        "created_at": conversation.created_at,
+        "updated_at": conversation.updated_at,
+    }

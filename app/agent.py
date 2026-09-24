@@ -4,7 +4,7 @@ One call to Agent.ask() handles one user message:
 
     append user message
     repeat (bounded):
-        stream Claude's response            -> yield TextDelta events
+        stream the model's response         -> yield TextDelta / ProgressDelta events
         if it requested tools: run them     -> yield ToolStarted / ToolFinished events
                                append results and loop
         else: done                          -> yield TurnFinished
@@ -14,17 +14,26 @@ results. If a turn fails midway, the history is rolled back to where it was befo
 so a dangling tool_use without its tool_result can never poison the next request.
 """
 
-import json
-from collections.abc import Iterator
+from collections.abc import Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import anthropic
+from anthropic.types.beta import BetaMessage, BetaMessageParam, BetaTextBlockParam
 
-from app.bigquery_tool import BigQueryRunner, QueryRejected, QueryResult
 from app.config import Settings
-from app.prompts import build_system_prompt
+from app.events import (
+    Event,
+    Message,
+    ProgressDelta,
+    TextDelta,
+    ToolFinished,
+    ToolStarted,
+    TurnFailed,
+    TurnFinished,
+    Usage,
+)
+from app.tools.base import Tool, ToolError
 
 MAX_OUTPUT_TOKENS = 64_000
 BETAS = [
@@ -35,116 +44,34 @@ BETAS = [
     "thinking-display-updates-2026-08-18",
 ]
 
-# Tool inputs are short SQL strings, so eager input streaming would buy little latency
-# and we keep the API's server-side schema validation of tool inputs instead.
-RUN_SQL_TOOL = {
-    "name": "run_sql",
-    "description": (
-        "Run one read-only BigQuery Standard SQL SELECT statement against the GA4 ecommerce "
-        "sample and return the result rows as JSON. Queries are dry-run first: non-SELECT "
-        "statements and queries that would scan too many bytes are rejected with an explanation. "
-        "Only the first rows are returned; 'truncated' tells you if there were more."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "A single SELECT statement (CTEs allowed). Always filter on _TABLE_SUFFIX.",
-            },
-            "purpose": {
-                "type": "string",
-                "description": "One short sentence describing what this query checks; shown to the user.",
-            },
-        },
-        "required": ["query", "purpose"],
-        "additionalProperties": False,
-    },
-}
-
-
-# ---- Events streamed to the caller -------------------------------------------------------
-
-@dataclass
-class TextDelta:
-    text: str
-
-
-@dataclass
-class ProgressDelta:
-    """A short note the model writes while working (between tool calls); not part of the answer."""
-    text: str
-
-
-@dataclass
-class ToolStarted:
-    tool_use_id: str
-    purpose: str
-    query: str
-
-
-@dataclass
-class ToolFinished:
-    tool_use_id: str
-    result: QueryResult | None = None
-    error: str | None = None
-
-
-@dataclass
-class Usage:
-    input_tokens: int = 0
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
-    output_tokens: int = 0
-    model_calls: int = 0
-
-    def add(self, usage: Any) -> None:
-        self.input_tokens += usage.input_tokens
-        self.cache_read_tokens += usage.cache_read_input_tokens or 0
-        self.cache_write_tokens += usage.cache_creation_input_tokens or 0
-        self.output_tokens += usage.output_tokens
-        self.model_calls += 1
-
-
-@dataclass
-class TurnFinished:
-    usage: Usage
-    # The messages this turn appended to the history (user question through final answer).
-    new_messages: list[dict[str, Any]]
-
-
-@dataclass
-class TurnFailed:
-    message: str
-    usage: Usage = field(default_factory=Usage)
-
-
-Event = TextDelta | ProgressDelta | ToolStarted | ToolFinished | TurnFinished | TurnFailed
-
 
 class AgentError(Exception):
     pass
 
 
-# ---- Agent -------------------------------------------------------------------------------
-
 class Agent:
-    def __init__(self, settings: Settings, messages: list[dict[str, Any]] | None = None,
-                 client: anthropic.Anthropic | None = None, sql: BigQueryRunner | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        client: anthropic.Anthropic,
+        tools: Sequence[Tool],
+        system_prompt: str,
+        messages: list[Message] | None = None,
+    ):
         self._settings = settings
-        self._client = client or anthropic.Anthropic()
-        self._sql = sql or BigQueryRunner(
-            settings.gcp_project, settings.max_bytes_billed, settings.max_result_rows
-        )
+        self._client = client
+        self._tools = {tool.name: tool for tool in tools}
+        self._tool_definitions = [tool.definition for tool in tools]
         # Explicit breakpoint on the large, static system prompt; the top-level cache_control
         # in _stream_response additionally caches the growing conversation.
-        self._system = [{"type": "text", "text": build_system_prompt(),
-                         "cache_control": {"type": "ephemeral"}}]
+        self._system: list[BetaTextBlockParam] = [
+            {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}
+        ]
         # Plain JSON-compatible dicts, exactly as sent to the API, so the history can be saved
         # and reloaded (e.g. from app.storage) without changing a byte.
-        self.messages: list[dict[str, Any]] = list(messages or [])
+        self.messages: list[Message] = list(messages or [])
 
-    def ask(self, question: str) -> Iterator[Event]:
+    def ask(self, question: str) -> Generator[Event, None, None]:
         checkpoint = len(self.messages)
         usage = Usage()
         completed = False
@@ -165,10 +92,15 @@ class Agent:
             # can't trigger the rollback above.
             yield TurnFinished(usage, self.messages[checkpoint:])
 
-    def _run_loop(self, usage: Usage) -> Iterator[Event]:
+    def _run_loop(self, usage: Usage) -> Generator[Event, None, None]:
         for _ in range(self._settings.max_agent_steps):
             response = yield from self._stream_response()
-            usage.add(response.usage)
+            usage.add(
+                response.usage.input_tokens,
+                response.usage.cache_read_input_tokens,
+                response.usage.cache_creation_input_tokens,
+                response.usage.output_tokens,
+            )
             self.messages.append(
                 {"role": "assistant", "content": [_to_request_json(b) for b in response.content]}
             )
@@ -191,14 +123,16 @@ class Agent:
             "Try a narrower question."
         )
 
-    def _stream_response(self) -> Iterator[Event]:
+    def _stream_response(self) -> Generator[Event, None, BetaMessage]:
         """Stream one model response, yielding text as it arrives; returns the final message."""
         with self._client.beta.messages.stream(
             model=self._settings.model,
             max_tokens=MAX_OUTPUT_TOKENS,
             system=self._system,
-            tools=[RUN_SQL_TOOL],
-            messages=self.messages,
+            tools=self._tool_definitions,
+            # The history is kept as plain dicts so it can be stored as JSON; they have the
+            # shape of BetaMessageParam, which is what the SDK expects here.
+            messages=cast(list[BetaMessageParam], self.messages),
             cache_control={"type": "ephemeral"},
             thinking={"type": "adaptive", "display": "updates"},
             output_config={"effort": self._settings.effort},
@@ -212,46 +146,49 @@ class Agent:
                     yield ProgressDelta(event.thinking)
             return stream.get_final_message()
 
-    def _run_tools(self, tool_uses: list[Any]) -> Iterator[Event]:
-        """Run the requested queries concurrently; returns tool_result blocks in request order."""
+    def _run_tools(self, tool_uses: list[Any]) -> Generator[Event, None, list[dict[str, Any]]]:
+        """Run the requested tools concurrently; returns tool_result blocks in request order."""
         for block in tool_uses:
-            yield ToolStarted(block.id, block.input.get("purpose", ""), block.input.get("query", ""))
+            yield ToolStarted(block.id, block.name, block.input)
 
         with ThreadPoolExecutor(max_workers=len(tool_uses)) as pool:
-            outcomes = list(pool.map(self._execute_tool, tool_uses))
+            outcomes = list(pool.map(self._run_tool, tool_uses))
 
         tool_results = []
-        for block, (finished, result_block) in zip(tool_uses, outcomes):
+        for finished, result_block in outcomes:
             yield finished
             tool_results.append(result_block)
         return tool_results
 
-    def _execute_tool(self, block: Any) -> tuple[ToolFinished, dict[str, Any]]:
-        if block.name != RUN_SQL_TOOL["name"]:
-            error = f"Unknown tool: {block.name}"
-        else:
-            try:
-                result = self._sql.run(block.input["query"])
-            except QueryRejected as exc:
-                error = str(exc)
-            else:
-                content = json.dumps({
-                    "columns": result.columns,
-                    "rows": result.rows,
-                    "rows_returned": len(result.rows),
-                    "total_rows": result.total_rows,
-                    "truncated": result.truncated,
-                    "mb_scanned": round(result.bytes_processed / 1024**2, 1),
-                })
-                return (ToolFinished(block.id, result=result),
-                        {"type": "tool_result", "tool_use_id": block.id, "content": content})
-
-        return (ToolFinished(block.id, error=error),
-                {"type": "tool_result", "tool_use_id": block.id, "content": error, "is_error": True})
+    def _run_tool(self, block: Any) -> tuple[ToolFinished, dict[str, Any]]:
+        try:
+            tool = self._tools.get(block.name)
+            if tool is None:
+                raise ToolError(f"Unknown tool: {block.name}")
+            outcome = tool.run(block.input)
+        except ToolError as exc:
+            return (
+                ToolFinished(block.id, block.name, error=str(exc)),
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": str(exc),
+                    "is_error": True,
+                },
+            )
+        return (
+            ToolFinished(block.id, block.name, output=outcome.output),
+            {"type": "tool_result", "tool_use_id": block.id, "content": outcome.content},
+        )
 
 
 def _to_request_json(block: Any) -> dict[str, Any]:
     """Serialize a response content block the same way the SDK does when sending it back
-    (see anthropic._utils._json.openapi_model_dump), so stored history is identical to sent history."""
-    return block.model_dump(mode="json", by_alias=True, exclude_unset=True,
-                            exclude=getattr(block, "__api_exclude__", None))
+    (anthropic._utils._json.openapi_model_dump), so stored history equals sent history."""
+    dumped: dict[str, Any] = block.model_dump(
+        mode="json",
+        by_alias=True,
+        exclude_unset=True,
+        exclude=getattr(block, "__api_exclude__", None),
+    )
+    return dumped

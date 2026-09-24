@@ -28,24 +28,35 @@ def main() -> None:
     client = bigquery.Client()
     print(f"Connected as project: {client.project}")
 
-    run(client, "Date range and volume", f"""
+    run(
+        client,
+        "Date range and volume",
+        f"""
         SELECT
           MIN(PARSE_DATE('%Y%m%d', event_date)) AS first_day,
           MAX(PARSE_DATE('%Y%m%d', event_date)) AS last_day,
           COUNT(*) AS events,
           COUNT(DISTINCT user_pseudo_id) AS users
         FROM `{DATASET}.events_*`
-    """)
+    """,
+    )
 
-    run(client, "Top event types", f"""
+    run(
+        client,
+        "Top event types",
+        f"""
         SELECT event_name, COUNT(*) AS events
         FROM `{DATASET}.events_*`
         GROUP BY event_name
         ORDER BY events DESC
         LIMIT 15
-    """)
+    """,
+    )
 
-    run(client, "Revenue by traffic source (Dec 2020)", f"""
+    run(
+        client,
+        "Revenue by traffic source (Dec 2020)",
+        f"""
         SELECT
           traffic_source.source AS source,
           COUNT(DISTINCT user_pseudo_id) AS purchasers,
@@ -56,16 +67,21 @@ def main() -> None:
         GROUP BY source
         ORDER BY revenue DESC
         LIMIT 10
-    """)
+    """,
+    )
 
-    run(client, "Most common event_params keys (nested field)", f"""
+    run(
+        client,
+        "Most common event_params keys (nested field)",
+        f"""
         SELECT p.key, COUNT(*) AS occurrences
         FROM `{DATASET}.events_*`, UNNEST(event_params) AS p
         WHERE _TABLE_SUFFIX = '20201201'
         GROUP BY p.key
         ORDER BY occurrences DESC
         LIMIT 15
-    """)
+    """,
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,39 @@
+[project]
+name = "ga4-analysis-agent"
+version = "0.1.0"
+description = "Conversational data analysis over the GA4 ecommerce sample dataset"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # import sorting
+    "B",        # bugbear: likely bugs and design problems
+    "UP",       # modern Python syntax
+    "SIM",      # simplifications
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Prompt text is data, not code: rewrapping it changes the prompt the model sees, and stored
+# conversations are tied to the exact prompt they were created with.
+"app/prompts.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["app"]
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["google.cloud.*", "google.api_core.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

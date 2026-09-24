@@ -5,9 +5,8 @@ import argparse
 import uvicorn
 
 from app.api import create_app
+from app.bootstrap import build_session
 from app.config import load_settings
-from app.session import ChatSession
-from app.storage import ConversationStore
 
 
 def main() -> None:
@@ -16,9 +15,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
-    settings = load_settings()
-    session = ChatSession(settings, ConversationStore(settings.database_path))
-    uvicorn.run(create_app(session), host=args.host, port=args.port)
+    uvicorn.run(create_app(build_session(load_settings())), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

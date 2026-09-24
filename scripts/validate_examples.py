@@ -1,7 +1,8 @@
 """Run every query in docs/example_queries.sql and report cost, row count and a preview.
 
 Usage:
-    GOOGLE_CLOUD_PROJECT=<project-id> .venv/bin/python scripts/validate_examples.py [--dry-run] [name ...]
+    GOOGLE_CLOUD_PROJECT=<project-id> .venv/bin/python scripts/validate_examples.py \
+        [--dry-run] [name ...]
 
 --dry-run validates syntax and reports bytes that would be scanned, at no cost.
 """
@@ -36,11 +37,13 @@ def parse_examples(text: str) -> list[Example]:
         header, _, body = block.partition("\n")
         question = re.search(r"^-- question:\s*(.+)$", body, flags=re.MULTILINE)
         sql = "\n".join(line for line in body.splitlines() if not line.startswith("--"))
-        examples.append(Example(
-            name=header.strip(),
-            question=question.group(1).strip() if question else "",
-            sql=sql.strip().rstrip(";"),
-        ))
+        examples.append(
+            Example(
+                name=header.strip(),
+                question=question.group(1).strip() if question else "",
+                sql=sql.strip().rstrip(";"),
+            )
+        )
     return examples
 
 
@@ -54,7 +57,8 @@ def main(args: list[str]) -> int:
 
     client = bigquery.Client()
     config = bigquery.QueryJobConfig(
-        maximum_bytes_billed=MAX_BYTES_BILLED, dry_run=dry_run,
+        maximum_bytes_billed=MAX_BYTES_BILLED,
+        dry_run=dry_run,
     )
     failures = 0
     total_mb = 0.0
@@ -77,7 +81,10 @@ def main(args: list[str]) -> int:
             print(df.head(PREVIEW_ROWS).to_string(index=False))
 
     verb = "would scan" if dry_run else "scanned"
-    print(f"\n{len(examples) - failures}/{len(examples)} queries succeeded, {verb} {total_mb / 1024:.2f} GB total")
+    print(
+        f"\n{len(examples) - failures}/{len(examples)} queries succeeded, "
+        f"{verb} {total_mb / 1024:.2f} GB total"
+    )
     return 1 if failures else 0
 
 

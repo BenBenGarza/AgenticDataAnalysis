@@ -1,4 +1,4 @@
-"""Read-only BigQuery access for the agent.
+"""Read-only, cost-capped BigQuery execution.
 
 Every query goes through a free dry run first. The dry run is BigQuery's own parser,
 so it gives us two guarantees without hand-written SQL parsing:
@@ -34,10 +34,14 @@ class QueryResult:
     def truncated(self) -> bool:
         return self.total_rows > len(self.rows)
 
+    @property
+    def mb_scanned(self) -> float:
+        return round(self.bytes_processed / 1024**2, 1)
+
 
 class BigQueryRunner:
-    def __init__(self, project: str, max_bytes_billed: int, max_rows: int):
-        self._client = bigquery.Client(project=project)
+    def __init__(self, client: bigquery.Client, max_bytes_billed: int, max_rows: int):
+        self._client = client
         self._max_bytes = max_bytes_billed
         self._max_rows = max_rows
 
@@ -46,7 +50,8 @@ class BigQueryRunner:
         if estimated_bytes > self._max_bytes:
             raise QueryRejected(
                 f"Query would scan {_gb(estimated_bytes)}, over the {_gb(self._max_bytes)} limit. "
-                "Narrow the _TABLE_SUFFIX date range or select fewer columns (event_params is the heaviest)."
+                "Narrow the _TABLE_SUFFIX date range or select fewer columns "
+                "(event_params is the heaviest)."
             )
 
         config = bigquery.QueryJobConfig(maximum_bytes_billed=self._max_bytes)
@@ -91,7 +96,7 @@ def _to_json_value(value: Any) -> Any:
 def _error_message(exc: gcp_exceptions.GoogleAPICallError) -> str:
     # The first error entry carries BigQuery's precise message (with line:column).
     errors = getattr(exc, "errors", None) or []
-    return errors[0].get("message", str(exc)) if errors else exc.message
+    return str(errors[0].get("message", exc)) if errors else str(exc.message)
 
 
 def _gb(n_bytes: int) -> str:
